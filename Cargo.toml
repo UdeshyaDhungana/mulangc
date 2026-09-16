@@ -1,0 +1,18 @@
+
+[package]
+name = "mulang-compiler"
+version = "0.1.0"
+edition = "2024"
+description = "Toolchain for the mulang programming language"
+
+[lib]
+name = "mulang"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mulang"
+path = "src/main.rs"
+
+[dependencies]
+strum = "0.26"
+strum_macros = "0.26"
