@@ -101,9 +101,6 @@ $ opens and closes with a dollar sign $
 | Builtin | Takes | Does |
 | --- | --- | --- |
 | `bhan_muji(…)` | anything | prints its arguments and a newline |
-| `lambai_muji(x)` | string, array, hashmap | length |
-| `khaad_muji(array, value)` | array, value | appends in place |
-| `udaa_muji(array[, index])` | array, optional index | removes and returns that element, or the last |
 | `abs(x)` | integer, decimal | absolute value |
 
 ## Layout

@@ -68,82 +68,6 @@ pub fn lookup(name: &str) -> Option<&'static Builtin> {
 
 static BUILTINS: &[Builtin] = &[
     Builtin {
-        name: "lambai_muji",
-        minimum_arguments: 1,
-        maximum_arguments: Some(1),
-        apply: |_, arguments, span| match &arguments[0] {
-            Value::Text(content) => Ok(Value::Integer(content.chars().count() as i64)),
-            Value::Array(elements) => Ok(Value::Integer(elements.borrow().len() as i64)),
-            Value::HashMap(entries) => Ok(Value::Integer(entries.borrow().len() as i64)),
-            other => Err(Diagnostic::error(
-                span,
-                format!(
-                    "`lambai_muji` needs a string, an array or a hashmap, not {}",
-                    other.type_name()
-                ),
-            )),
-        },
-    },
-    Builtin {
-        name: "khaad_muji",
-        minimum_arguments: 2,
-        maximum_arguments: Some(2),
-        apply: |_, mut arguments, span| {
-            let element = arguments.pop().expect("arity checked");
-            let Value::Array(elements) = arguments.pop().expect("arity checked") else {
-                return Err(Diagnostic::error(span, "`khaad_muji` appends to an array"));
-            };
-            elements.borrow_mut().push(element);
-            Ok(Value::Null)
-        },
-    },
-    Builtin {
-        name: "udaa_muji",
-        minimum_arguments: 1,
-        maximum_arguments: Some(2),
-        apply: |_, arguments, span| {
-            let Value::Array(elements) = &arguments[0] else {
-                return Err(Diagnostic::error(span, "`udaa_muji` removes from an array"));
-            };
-            let mut elements = elements.borrow_mut();
-
-            if elements.is_empty() {
-                return Err(Diagnostic::error(
-                    span,
-                    "`udaa_muji` cannot remove from an empty array",
-                ));
-            }
-
-            // With no index given, remove the last element.
-            let position = match arguments.get(1) {
-                None => elements.len() - 1,
-                Some(Value::Integer(index)) => usize::try_from(*index)
-                    .ok()
-                    .filter(|index| *index < elements.len())
-                    .ok_or_else(|| {
-                        Diagnostic::error(
-                            span,
-                            format!(
-                                "index {index} is outside this array of {} element(s)",
-                                elements.len()
-                            ),
-                        )
-                    })?,
-                Some(other) => {
-                    return Err(Diagnostic::error(
-                        span,
-                        format!(
-                            "`udaa_muji` needs an integer index, not {}",
-                            other.type_name()
-                        ),
-                    ));
-                }
-            };
-
-            Ok(elements.remove(position))
-        },
-    },
-    Builtin {
         name: "bhan_muji",
         minimum_arguments: 0,
         maximum_arguments: None,
@@ -197,57 +121,9 @@ mod tests {
     }
 
     #[test]
-    fn length_counts_characters_not_bytes() {
-        let result = call("lambai_muji", vec![Value::text("नमस्कार")]);
-        assert!(matches!(result, Ok(Value::Integer(7))));
-    }
-
-    #[test]
-    fn appending_is_visible_through_every_handle_to_the_array() {
-        let array = Value::array(vec![Value::Integer(1)]);
-        call("khaad_muji", vec![array.clone(), Value::Integer(2)]).expect("should append");
-        assert_eq!(array.to_string(), "[1, 2]");
-    }
-
-    #[test]
-    fn removing_without_an_index_takes_the_last_element() {
-        let array = Value::array(vec![Value::Integer(1), Value::Integer(2)]);
-        let removed = call("udaa_muji", vec![array.clone()]).expect("should remove");
-
-        assert!(matches!(removed, Value::Integer(2)));
-        assert_eq!(array.to_string(), "[1]");
-    }
-
-    #[test]
-    fn removing_from_an_empty_array_is_an_error_not_a_crash() {
-        let error = call("udaa_muji", vec![Value::array(vec![])]).expect_err("should fail");
-        assert!(error.message.contains("empty array"));
-    }
-
-    #[test]
-    fn removing_past_the_end_is_an_error_not_a_crash() {
-        let array = Value::array(vec![Value::Integer(1)]);
-        let error = call("udaa_muji", vec![array, Value::Integer(9)]).expect_err("should fail");
-        assert!(error.message.contains("outside this array"));
-    }
-
-    #[test]
-    fn removing_at_a_negative_index_is_an_error() {
-        let array = Value::array(vec![Value::Integer(1)]);
-        let error = call("udaa_muji", vec![array, Value::Integer(-1)]).expect_err("should fail");
-        assert!(error.message.contains("outside this array"));
-    }
-
-    #[test]
     fn arity_is_reported_before_the_builtin_runs() {
         let error = call("abs", vec![]).expect_err("should fail");
         assert_eq!(error.message, "`abs` takes 1 argument(s), but was given 0");
-    }
-
-    #[test]
-    fn a_builtin_with_a_range_reports_both_ends() {
-        let error = call("udaa_muji", vec![]).expect_err("should fail");
-        assert!(error.message.contains("takes 1 or 2 argument(s)"));
     }
 
     #[test]

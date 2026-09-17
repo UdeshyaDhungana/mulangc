@@ -58,7 +58,6 @@ impl Compiler {
     }
 
     fn push_frame(&mut self, frame_size: usize) {
-        self.emit_line(&format!("\n// Added a new frame of size {}", frame_size));
         self.frames.push({
             Frame {
                 size: frame_size,
@@ -81,10 +80,6 @@ impl Compiler {
     }
 
     fn pop_frame(&mut self) {
-        self.emit_line(&format!(
-            "\n// Popping frame of size {}",
-            self.frames.last().unwrap().size
-        ));
         self.frames.pop();
 
         // Frame release assembly
@@ -205,11 +200,6 @@ impl Compiler {
 
                 let offset = (TryInto::<i64>::try_into(sum_of_frame_sizes).unwrap()) + local_offset;
 
-                self.emit_line(&format!(
-                    "// {} + {} = {}",
-                    sum_of_frame_sizes, local_offset, offset
-                ));
-
                 self.emit_line(&format!("ldr x0, [x29, #{offset}]"));
                 self.emit_line("str x0, [sp, #-16]!");
                 Ok(())
@@ -308,11 +298,6 @@ impl Compiler {
                         let offset =
                             (TryInto::<i64>::try_into(sum_of_frame_sizes).unwrap()) + local_offset;
 
-                        self.emit_line(&format!(
-                            "// Assignment offset {} + {} = {}",
-                            sum_of_frame_sizes, local_offset, offset
-                        ));
-
                         self.emit_line("ldr x0, [sp], #16");
                         self.emit_line(&format!("str x0, [x29, #{offset}]"));
                         // According to the current specification, we classify assignment as an expression
@@ -331,9 +316,6 @@ impl Compiler {
                     #[strum(serialize_all = "snake_case")]
                     enum BuiltinFunctions {
                         BhanMuji,
-                        LambaiMuji,
-                        KhaadMuji,
-                        UdaaMuji,
                         Abs,
                     }
 
@@ -359,7 +341,7 @@ impl Compiler {
                             self.emit_line("bl _bhan_muji");
                             Ok(())
                         }
-                        _ => todo!("builtin not implemented"),
+                        BuiltinFunctions::Abs => todo!("abs not implemented"),
                     }
                 }
                 _ => todo!("calling the result of an expression"),
