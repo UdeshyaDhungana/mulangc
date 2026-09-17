@@ -35,8 +35,13 @@ impl Counter {
     }
 }
 
+struct Frame {
+    size: usize,
+    offset_map: HashMap<String, i64>,
+}
+
 pub struct Compiler {
-    frame_offset_map: HashMap<String, i64>,
+    frames: Vec<Frame>,
     output_file: String,
     lines: Vec<String>,
     counter: Counter,
@@ -46,10 +51,50 @@ impl Compiler {
     pub fn new(output_file: &str) -> Self {
         Self {
             output_file: output_file.to_string(),
-            frame_offset_map: HashMap::new(),
+            frames: Vec::new(),
             lines: Vec::new(),
             counter: Counter::default(),
         }
+    }
+
+    fn push_frame(&mut self, frame_size: usize) {
+        self.emit_line(&format!("\n// Added a new frame of size {}", frame_size));
+        self.frames.push({
+            Frame {
+                size: frame_size,
+                offset_map: HashMap::new(),
+            }
+        });
+
+        // Assembly for frame reservation
+        // x29 is the frame pointer and x30 is the return address
+        // So, for a new frame, we save the frame pointer and return address,
+        // then move `stack pointer` to `x29` to set up the frame pointer
+        // frame pointer is fixed because we'll need to calculate offsets
+        // for locals
+        self.emit_line("stp x29, x30, [sp, #-16]!");
+        self.emit_line("mov x29, sp");
+        if frame_size > 0 {
+            self.emit_line(format!("sub sp, sp, #{frame_size}").as_str());
+        }
+        self.emit_newline();
+    }
+
+    fn pop_frame(&mut self) {
+        self.emit_line(&format!(
+            "\n// Popping frame of size {}",
+            self.frames.last().unwrap().size
+        ));
+        self.frames.pop();
+
+        // Frame release assembly
+        self.emit_newline();
+        self.emit_line("mov sp, x29");
+        self.emit_line("ldp x29, x30, [sp], #16");
+    }
+
+    fn get_topmost_frame_offset_map(&mut self) -> &mut HashMap<String, i64> {
+        &mut self.frames.last_mut().unwrap().offset_map
     }
 
     fn emit_line(&mut self, line: &str) {
@@ -75,34 +120,38 @@ impl Compiler {
         // For now, we just emit the builtins here
         self.emit_builtin_functions();
 
-        self.emit_line(".p2align 2");
-        self.emit_line("_main:");
-        self.emit_frame_reservation_assembly(frame_size_for_statements(&program.statements));
+        self.emit_outer_level_line(".p2align 2");
+        self.emit_outer_level_line("_main:");
+        self.push_frame(frame_size_for_statements(&program.statements));
         for statement in &program.statements {
             self.emit_statement_assembly(statement)?;
         }
         // return 0;
         self.emit_line("mov x0, #0");
-        self.emit_frame_release_assembly();
+        self.pop_frame();
+        self.emit_line("ret");
         self.write_assembly_file()
     }
 
     fn emit_statement_assembly(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
         match &statement.kind {
             StatementKind::Declaration { identifier, value } => {
-                if self.frame_offset_map.contains_key(&identifier.name) {
+                if self
+                    .get_topmost_frame_offset_map()
+                    .contains_key(&identifier.name)
+                {
                     return Err(Diagnostic::error(
                         identifier.span,
-                        "Redeclaration of variables not allowed",
+                        "Redeclaration of variable in the same scope is not allowed",
                     ));
                 }
 
                 // TODO: Find a way to decrement this efficiently
                 let next_offset: i64 =
-                    -i64::try_from(SLOT_SIZE * (1 + self.frame_offset_map.len()))
+                    -i64::try_from(SLOT_SIZE * (1 + self.get_topmost_frame_offset_map().len()))
                         .expect("Failed converting frame offset");
 
-                self.frame_offset_map
+                self.get_topmost_frame_offset_map()
                     .insert(identifier.name.clone(), next_offset);
 
                 self.emit_expression_evaluation_assembly_and_push_evaluated(value)?;
@@ -127,10 +176,39 @@ impl Compiler {
         expression: &Expression,
     ) -> Result<(), Diagnostic> {
         match &expression.kind {
-            ExpressionKind::Identifier(id) => {
-                let offset = self.frame_offset_map.get(id).ok_or_else(|| {
-                    Diagnostic::error(expression.span, format!("`{id}` is not a valid identifier"))
-                })?;
+            ExpressionKind::Identifier(identifier) => {
+                let mut sum_of_frame_sizes = 0;
+                let mut containing_frame: Option<&Frame> = None;
+                for (idx, frame) in self.frames.iter().rev().enumerate() {
+                    if idx != 0 {
+                        sum_of_frame_sizes += 16 + frame.size;
+                    }
+
+                    if frame.offset_map.contains_key(identifier) {
+                        containing_frame = Some(frame);
+                        break;
+                    }
+                }
+
+                if containing_frame.is_none() {
+                    return Err(Diagnostic::error(
+                        expression.span,
+                        format!("`{identifier}` is not a valid identifier"),
+                    ));
+                }
+
+                let local_offset = containing_frame
+                    .unwrap()
+                    .offset_map
+                    .get(identifier)
+                    .unwrap();
+
+                let offset = (TryInto::<i64>::try_into(sum_of_frame_sizes).unwrap()) + local_offset;
+
+                self.emit_line(&format!(
+                    "// {} + {} = {}",
+                    sum_of_frame_sizes, local_offset, offset
+                ));
 
                 self.emit_line(&format!("ldr x0, [x29, #{offset}]"));
                 self.emit_line("str x0, [sp, #-16]!");
@@ -201,17 +279,48 @@ impl Compiler {
                 self.emit_expression_evaluation_assembly_and_push_evaluated(value)?;
                 match target {
                     AssignmentTarget::Variable(identifier) => {
-                        if let Some(offset) = self.frame_offset_map.get(&identifier.name).copied() {
-                            self.emit_line("ldr x0, [sp], #16");
-                            self.emit_line(&format!("str x0, [x29, #{offset}]"));
-                            self.emit_line("ldr x0, [sp, #-16]!");
-                            Ok(())
-                        } else {
-                            Err(Diagnostic::error(
+                        let mut sum_of_frame_sizes = 0;
+                        let mut containing_frame: Option<&Frame> = None;
+                        for (idx, frame) in self.frames.iter().rev().enumerate() {
+                            if idx != 0 {
+                                sum_of_frame_sizes += 16 + frame.size;
+                            }
+
+                            if frame.offset_map.contains_key(&identifier.name) {
+                                containing_frame = Some(frame);
+                                break;
+                            }
+                        }
+
+                        if containing_frame.is_none() {
+                            return Err(Diagnostic::error(
                                 identifier.span,
                                 format!("variable '{}' not found for assignment", identifier.name),
-                            ))
+                            ));
                         }
+
+                        let local_offset = containing_frame
+                            .unwrap()
+                            .offset_map
+                            .get(&identifier.name)
+                            .unwrap();
+
+                        let offset =
+                            (TryInto::<i64>::try_into(sum_of_frame_sizes).unwrap()) + local_offset;
+
+                        self.emit_line(&format!(
+                            "// Assignment offset {} + {} = {}",
+                            sum_of_frame_sizes, local_offset, offset
+                        ));
+
+                        self.emit_line("ldr x0, [sp], #16");
+                        self.emit_line(&format!("str x0, [x29, #{offset}]"));
+                        // According to the current specification, we classify assignment as an expression
+                        // Which should leave value on the top of the stack
+                        // However, this one doesn't
+                        // The specification isn't clear yet.
+                        // We'll decide it later. This comment is here just for book-keeping.
+                        Ok(())
                     }
                     _ => todo!("Index assignment not implemented;"),
                 }
@@ -262,22 +371,32 @@ impl Compiler {
                 for (idx, branch) in branches.iter().enumerate() {
                     let current_label = format!("yedi_muji_{}_branch_{}", if_stmt_number, idx);
                     let next_label = format!("yedi_muji_{}_branch_{}", if_stmt_number, idx + 1);
+
                     self.emit_outer_level_line(&format!("{current_label}:"));
                     self.emit_expression_evaluation_assembly_and_push_evaluated(&branch.condition)?;
                     self.emit_line("ldr x0, [sp], #16");
                     self.emit_line(&format!("cbz x0, {next_label}"));
+
+                    self.push_frame(frame_size_for_statements(&branch.consequence.statements));
                     for statement in &branch.consequence.statements {
                         self.emit_statement_assembly(statement)?;
                     }
+                    self.pop_frame();
                     self.emit_line(&format!("b {if_stmt_end_label}"));
                 }
 
-                self.emit_outer_level_line(&format!("{if_stmt_end_label}:"));
+                self.emit_outer_level_line(&format!(
+                    "yedi_muji_{}_branch_{}:",
+                    if_stmt_number,
+                    branches.len()
+                ));
 
                 if let Some(fallback) = fallback {
+                    self.push_frame(frame_size_for_statements(&fallback.statements));
                     for statement in &fallback.statements {
                         self.emit_statement_assembly(statement)?;
                     }
+                    self.pop_frame();
                 }
 
                 self.emit_outer_level_line(&format!("{if_stmt_end_label}:"));
@@ -292,9 +411,11 @@ impl Compiler {
                 self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
                 self.emit_line("ldr x0, [sp], #16");
                 self.emit_line(&format!("cbz x0, {while_end_label}"));
+                self.push_frame(frame_size_for_statements(&body.statements));
                 for statement in &body.statements {
                     self.emit_statement_assembly(statement)?;
                 }
+                self.pop_frame();
                 self.emit_line(&format!("b {while_start_label}"));
                 self.emit_outer_level_line(&format!("{while_end_label}:"));
                 Ok(())
@@ -305,6 +426,15 @@ impl Compiler {
                 update,
                 body,
             } => {
+                // Option::iter yields one item or none, so a header without a
+                // declaration collects to an empty Vec and reserves no slot.
+                let initialiser_statements: Vec<Statement> = initialiser
+                    .iter()
+                    .map(|statement| (**statement).clone())
+                    .collect();
+
+                self.push_frame(frame_size_for_statements(&initialiser_statements));
+
                 if let Some(initialiser) = initialiser {
                     self.emit_statement_assembly(initialiser)?;
                 }
@@ -315,12 +445,15 @@ impl Compiler {
                 self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
                 self.emit_line("ldr x0, [sp], #16");
                 self.emit_line(&format!("cbz x0, {while_end_label}"));
+                self.push_frame(frame_size_for_statements(&body.statements));
                 for statement in &body.statements {
                     self.emit_statement_assembly(statement)?;
                 }
+                self.pop_frame();
                 self.emit_expression_evaluation_assembly_and_push_evaluated(update)?;
                 self.emit_line(&format!("b {while_condition_label}"));
                 self.emit_outer_level_line(&format!("{while_end_label}:"));
+                self.pop_frame();
 
                 Ok(())
             }
@@ -329,65 +462,43 @@ impl Compiler {
     }
 
     fn emit_preamble(&mut self) {
-        self.emit_line("// PREAMBLE");
-        self.emit_line(".section __TEXT,__text,regular,pure_instructions");
-        self.emit_line(".globl _main");
+        self.emit_outer_level_line("// PREAMBLE");
+        self.emit_outer_level_line(".section __TEXT,__text,regular,pure_instructions");
+        self.emit_outer_level_line(".globl _main");
         self.emit_newline();
     }
 
     fn emit_builtin_functions(&mut self) {
-        self.emit_line("// BUILTINS");
+        self.emit_outer_level_line("// BUILTINS");
 
         // bhan_muji()
         // Only supports one integer argument for now
-        self.emit_line(".p2align 2");
-        self.emit_line("_bhan_muji:");
-        self.emit_line("stp x29, x30, [sp, #-16]!");
-        self.emit_line("mov x29, sp");
-        self.emit_line("sub sp, sp, #16");
+        self.emit_outer_level_line(".p2align 2");
+        self.emit_outer_level_line("_bhan_muji:");
+
+        // Could use a frame here, but not necessary for a builtin
+        self.push_frame(16);
 
         // because printf expects arguments on the stack
         self.emit_line("str x0, [sp]");
         self.emit_line("adrp x0, Lfmt_integer@PAGE");
         self.emit_line("add x0, x0, Lfmt_integer@PAGEOFF");
         self.emit_line("bl _printf");
-        self.emit_line("mov sp, x29");
-        self.emit_line("ldp x29, x30, [sp], #16");
+
+        self.pop_frame();
+
         self.emit_line("ret");
         self.emit_newline();
 
-        self.emit_line(".section __TEXT,__cstring,cstring_literals");
-        self.emit_line("Lfmt_integer:");
+        self.emit_outer_level_line(".section __TEXT,__cstring,cstring_literals");
+        self.emit_outer_level_line("Lfmt_integer:");
         // asciz, not ascii: printf needs the trailing NUL to find the end.
         self.emit_line(".asciz \"%ld\\n\"");
         self.emit_newline();
 
         // Back to the code section so what follows is not emitted as data.
-        self.emit_line(".section __TEXT,__text,regular,pure_instructions");
+        self.emit_outer_level_line(".section __TEXT,__text,regular,pure_instructions");
         self.emit_newline();
-    }
-
-    fn emit_frame_reservation_assembly(&mut self, frame_size: usize) {
-        // Explanation:
-        // x29 is the frame pointer and x30 is the return address
-        // So, for main, we save the frame pointer and return address,
-        // then move `sp` to `x29` to set up the frame pointer
-        // frame pointer is fixed because we'll need to calculate offsets
-        // for locals and temporaries
-        // stack moves
-        self.emit_line("stp x29, x30, [sp, #-16]!");
-        self.emit_line("mov x29, sp");
-        if frame_size > 0 {
-            self.emit_line(format!("sub sp, sp, #{frame_size}").as_str());
-        }
-        self.emit_newline();
-    }
-
-    fn emit_frame_release_assembly(&mut self) {
-        self.emit_newline();
-        self.emit_line("mov sp, x29");
-        self.emit_line("ldp x29, x30, [sp], #16");
-        self.emit_line("ret");
     }
 
     fn write_assembly_file(&self) -> Result<(), Diagnostic> {
