@@ -51,13 +51,10 @@ impl<'source> Lexer<'source> {
                 '%' => self.push(Token::Percent, start),
                 ',' => self.push(Token::Comma, start),
                 ';' => self.push(Token::Semicolon, start),
-                ':' => self.push(Token::Colon, start),
                 '(' => self.push(Token::LeftParenthesis, start),
                 ')' => self.push(Token::RightParenthesis, start),
                 '{' => self.push(Token::LeftBrace, start),
                 '}' => self.push(Token::RightBrace, start),
-                '[' => self.push(Token::LeftBracket, start),
-                ']' => self.push(Token::RightBracket, start),
 
                 '=' => {
                     self.push_one_or_two_character_token(Token::Assign, '=', Token::Equal, start)

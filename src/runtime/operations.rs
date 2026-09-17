@@ -46,11 +46,6 @@ pub fn apply_binary(
 
         BinaryOperator::Add => match (left, right) {
             (Value::Text(left), Value::Text(right)) => Ok(Value::text(format!("{left}{right}"))),
-            (Value::Array(left), Value::Array(right)) => {
-                let mut joined = left.borrow().clone();
-                joined.extend(right.borrow().iter().cloned());
-                Ok(Value::array(joined))
-            }
             _ => arithmetic(operator, left, right, span),
         },
 
@@ -219,30 +214,10 @@ mod tests {
     }
 
     #[test]
-    fn plus_joins_strings_and_arrays() {
+    fn plus_joins_strings() {
         let joined =
             binary(BinaryOperator::Add, Value::text("mu"), Value::text("ji")).expect("should join");
         assert_eq!(joined.to_string(), "muji");
-
-        let joined = binary(
-            BinaryOperator::Add,
-            Value::array(vec![Value::Integer(1)]),
-            Value::array(vec![Value::Integer(2)]),
-        )
-        .expect("should join");
-        assert_eq!(joined.to_string(), "[1, 2]");
-    }
-
-    #[test]
-    fn joining_arrays_leaves_both_operands_alone() {
-        let left = Value::array(vec![Value::Integer(1)]);
-        binary(
-            BinaryOperator::Add,
-            left.clone(),
-            Value::array(vec![Value::Integer(2)]),
-        )
-        .expect("should join");
-        assert_eq!(left.to_string(), "[1]");
     }
 
     #[test]

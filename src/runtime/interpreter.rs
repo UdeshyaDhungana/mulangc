@@ -10,7 +10,6 @@
 //! itself: a function call, a conditional branch and each turn of a loop all
 //! nest a scope, so a `thoos_muji` inside them cannot leak outwards.
 
-use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::rc::Rc;
 
@@ -135,15 +134,6 @@ impl Interpreter {
             ExpressionKind::Text(value) => Ok(Value::text(value)),
             ExpressionKind::Identifier(name) => Ok(resolve(name, span, scope)?),
 
-            ExpressionKind::Array(elements) => {
-                let mut values = Vec::with_capacity(elements.len());
-                for element in elements {
-                    values.push(self.evaluate_expression(element, scope)?);
-                }
-                Ok(Value::array(values))
-            }
-            ExpressionKind::HashMap(pairs) => self.evaluate_hash_map(pairs, scope),
-
             ExpressionKind::UnaryOperation { operator, operand } => {
                 let operand = self.evaluate_expression(operand, scope)?;
                 Ok(apply_unary(*operator, &operand, span)?)
@@ -158,14 +148,9 @@ impl Interpreter {
                 Ok(apply_binary(*operator, &left, &right, span)?)
             }
             ExpressionKind::Assignment { target, value } => {
-                self.evaluate_assignment(target, value, span, scope)
+                self.evaluate_assignment(target, value, scope)
             }
 
-            ExpressionKind::Index { collection, index } => {
-                let collection = self.evaluate_expression(collection, scope)?;
-                let index = self.evaluate_expression(index, scope)?;
-                Ok(read_element(&collection, &index, span)?)
-            }
             ExpressionKind::Call { callee, arguments } => {
                 self.evaluate_call(callee, arguments, span, scope)
             }
@@ -189,37 +174,10 @@ impl Interpreter {
         }
     }
 
-    fn evaluate_hash_map(
-        &mut self,
-        pairs: &[(Expression, Expression)],
-        scope: &ScopeHandle,
-    ) -> Outcome<Value> {
-        let mut entries = BTreeMap::new();
-
-        for (key, value) in pairs {
-            let evaluated_key = self.evaluate_expression(key, scope)?;
-            let Value::Text(evaluated_key) = evaluated_key else {
-                return Err(Diagnostic::error(
-                    key.span,
-                    format!(
-                        "a hashmap key must be a string, not {}",
-                        evaluated_key.type_name()
-                    ),
-                )
-                .into());
-            };
-            let evaluated_value = self.evaluate_expression(value, scope)?;
-            entries.insert(evaluated_key.to_string(), evaluated_value);
-        }
-
-        Ok(Value::hash_map(entries))
-    }
-
     fn evaluate_assignment(
         &mut self,
         target: &AssignmentTarget,
         value: &Expression,
-        span: Span,
         scope: &ScopeHandle,
     ) -> Outcome<Value> {
         let assigned = self.evaluate_expression(value, scope)?;
@@ -231,11 +189,6 @@ impl Interpreter {
                     return Err(undefined_name(name).into());
                 }
                 Ok(assigned)
-            }
-            AssignmentTarget::Element { collection, index } => {
-                let collection = self.evaluate_expression(collection, scope)?;
-                let index = self.evaluate_expression(index, scope)?;
-                Ok(store_element(&collection, &index, assigned, span)?)
             }
         }
     }
@@ -392,84 +345,6 @@ fn resolve(name: &str, span: Span, scope: &ScopeHandle) -> Result<Value, Diagnos
         .lookup(name)
         .or_else(|| builtins::lookup(name).map(Value::Builtin))
         .ok_or_else(|| Diagnostic::error(span, format!("`{name}` is not defined")))
-}
-
-fn read_element(collection: &Value, index: &Value, span: Span) -> Result<Value, Diagnostic> {
-    match collection {
-        Value::Array(elements) => {
-            let elements = elements.borrow();
-            let position = array_position(index, elements.len(), span)?;
-            Ok(elements[position].clone())
-        }
-        Value::HashMap(entries) => {
-            let key = hash_map_key(index, span)?;
-            // A key that was never set reads as khali_muji, the same as a
-            // hashmap that was never given that key at all.
-            Ok(entries.borrow().get(key).cloned().unwrap_or(Value::Null))
-        }
-        other => Err(
-            Diagnostic::error(span, format!("cannot index {}", other.type_name()))
-                .with_help("only arrays and hashmaps can be indexed"),
-        ),
-    }
-}
-
-fn store_element(
-    collection: &Value,
-    index: &Value,
-    value: Value,
-    span: Span,
-) -> Result<Value, Diagnostic> {
-    match collection {
-        Value::Array(elements) => {
-            let position = array_position(index, elements.borrow().len(), span)?;
-            elements.borrow_mut()[position] = value.clone();
-            Ok(value)
-        }
-        Value::HashMap(entries) => {
-            let key = hash_map_key(index, span)?.to_owned();
-            entries.borrow_mut().insert(key, value.clone());
-            Ok(value)
-        }
-        other => Err(
-            Diagnostic::error(span, format!("cannot assign into {}", other.type_name()))
-                .with_help("only arrays and hashmaps can be indexed"),
-        ),
-    }
-}
-
-/// Turns an index value into a position that is known to be in range, so both
-/// reading and writing an element get the same bounds check and the same message.
-fn array_position(index: &Value, length: usize, span: Span) -> Result<usize, Diagnostic> {
-    let Value::Integer(index) = index else {
-        return Err(Diagnostic::error(
-            span,
-            format!(
-                "an array index must be an integer, not {}",
-                index.type_name()
-            ),
-        ));
-    };
-
-    usize::try_from(*index)
-        .ok()
-        .filter(|position| *position < length)
-        .ok_or_else(|| {
-            Diagnostic::error(
-                span,
-                format!("index {index} is outside this array of {length} element(s)"),
-            )
-        })
-}
-
-fn hash_map_key(index: &Value, span: Span) -> Result<&str, Diagnostic> {
-    match index {
-        Value::Text(key) => Ok(key),
-        other => Err(Diagnostic::error(
-            span,
-            format!("a hashmap key must be a string, not {}", other.type_name()),
-        )),
-    }
 }
 
 fn undefined_name(name: &Identifier) -> Diagnostic {

@@ -19,7 +19,7 @@ cargo build --release
 thoos_muji x = 43;
 ```
 
-Types: integer, decimal, string, boolean, array, hashmap.
+Types: integer, decimal, string, boolean.
 
 ### Functions
 
@@ -58,7 +58,7 @@ yedi_muji (n > 0) {
 ```
 
 Both `nabhae_muji` and `nabhae_chikne` are optional. Only `jhut_muji` and
-`khali_muji` are false — `0`, `""` and `[]` are all true.
+`khali_muji` are false — `0` and `""` are both true.
 
 ### Loops
 
@@ -75,20 +75,6 @@ ghuma_muji (thoos_muji i = 0; i < 42; i = i + 1) {
 
 The `ghuma_muji` initialiser may declare (`thoos_muji i = 0`) or assign
 (`i = 0`). A loop variable it declares is gone once the loop ends.
-
-### Arrays and hashmaps
-
-```muji
-thoos_muji values = [1, "newstring", 69.69];
-values[0] = 99;
-
-thoos_muji countryCodes = { "NP": "+977", "IN": "+91" };
-countryCodes["US"] = "+1";
-```
-
-Hashmap keys are strings; values can be anything. Reading a key that was never
-set gives `khali_muji`. Arrays and hashmaps are shared handles, so a function
-that mutates one it was passed mutates the caller's.
 
 ### Comments
 
@@ -131,11 +117,11 @@ error recovery without anything downstream noticing.
 Every node carries the span it was parsed from, so errors point at source:
 
 ```
-error: index 7 is outside this array of 3 element(s)
+error: division by zero
  --> program.muji:2:11
   |
-2 | bhan_muji(x[7]);
-  |           ^^^^
+2 | bhan_muji(x / 0);
+  |           ^^^^^
 ```
 
 ## Tests
@@ -156,8 +142,8 @@ including every file in `examples/`, and checks what they print.
 - [x] **`nabhae_muji` chain + `nabhae_chikne`** — just more labels, no new concepts.
 - [x] **`jaba_samma_muji`** — the only new idea is a *backward* branch: label at the top, condition, body, `b` back.
 - [x] **`ghuma_muji`** — initialiser, then the same loop shape, with the update emitted before the backward branch.
-- [ ] Scoping
-- [ ] Manual functions
-- [ ] Remove: Arrays, hashmaps
-- [ ] Delete all builtins except abs
+- [X] Scoping
+- [X] Manual functions
+- [X] Remove: Arrays, hashmaps
+- [X] Delete all builtins except abs
 - [ ] Tighten every statement is an expression constraint using LLM

@@ -205,8 +205,6 @@ impl Parser<'_> {
 
             Token::Minus | Token::Bang => return self.parse_unary(),
             Token::LeftParenthesis => return self.parse_grouping(),
-            Token::LeftBracket => return self.parse_array(),
-            Token::LeftBrace => return self.parse_hash_map(),
             Token::Function => return self.parse_function(),
             Token::If => return self.parse_if(),
             Token::While => return self.parse_while(),
@@ -221,7 +219,6 @@ impl Parser<'_> {
     fn parse_infix(&mut self, left: Expression) -> Result<Expression, Diagnostic> {
         match self.current_token() {
             Token::LeftParenthesis => self.parse_call(left),
-            Token::LeftBracket => self.parse_index(left),
             Token::Assign => self.parse_assignment(left),
             _ => self.parse_binary(left),
         }
@@ -285,50 +282,6 @@ impl Parser<'_> {
         let inner = self.parse_expression(Precedence::Lowest)?;
         self.expect(Token::RightParenthesis)?;
         Ok(inner)
-    }
-
-    fn parse_array(&mut self) -> Result<Expression, Diagnostic> {
-        let start = self.expect(Token::LeftBracket)?;
-        let elements =
-            self.parse_comma_separated(&Token::RightBracket, Self::parse_expression_at_lowest)?;
-        let end = self.expect(Token::RightBracket)?;
-
-        Ok(Expression {
-            kind: ExpressionKind::Array(elements),
-            span: start.joined_with(end),
-        })
-    }
-
-    fn parse_hash_map(&mut self) -> Result<Expression, Diagnostic> {
-        let start = self.expect(Token::LeftBrace)?;
-        let pairs = self.parse_comma_separated(&Token::RightBrace, Self::parse_hash_map_pair)?;
-        let end = self.expect(Token::RightBrace)?;
-
-        Ok(Expression {
-            kind: ExpressionKind::HashMap(pairs),
-            span: start.joined_with(end),
-        })
-    }
-
-    fn parse_hash_map_pair(&mut self) -> Result<(Expression, Expression), Diagnostic> {
-        let key = self.parse_expression(Precedence::Lowest)?;
-        self.expect(Token::Colon)?;
-        let value = self.parse_expression(Precedence::Lowest)?;
-        Ok((key, value))
-    }
-
-    fn parse_index(&mut self, collection: Expression) -> Result<Expression, Diagnostic> {
-        self.expect(Token::LeftBracket)?;
-        let index = self.parse_expression(Precedence::Lowest)?;
-        let end = self.expect(Token::RightBracket)?;
-
-        Ok(Expression {
-            span: collection.span.joined_with(end),
-            kind: ExpressionKind::Index {
-                collection: Box::new(collection),
-                index: Box::new(index),
-            },
-        })
     }
 
     fn parse_call(&mut self, callee: Expression) -> Result<Expression, Diagnostic> {
@@ -459,8 +412,8 @@ impl Parser<'_> {
     }
 
     /// Reads `item (, item)*` up to but not including `closing`, which the
-    /// caller consumes. Shared by arrays, hash maps, parameters and arguments,
-    /// all of which are otherwise identical and all of which permit being empty.
+    /// caller consumes. Shared by parameters and arguments, which are otherwise
+    /// identical and both permit being empty.
     fn parse_comma_separated<T>(
         &mut self,
         closing: &Token,
@@ -553,18 +506,14 @@ fn assignment_target_of(expression: Expression) -> Result<AssignmentTarget, Diag
         ExpressionKind::Identifier(name) => {
             Ok(AssignmentTarget::Variable(Identifier { name, span }))
         }
-        ExpressionKind::Index { collection, index } => {
-            Ok(AssignmentTarget::Element { collection, index })
-        }
         _ => Err(Diagnostic::error(span, "cannot assign to this expression")
-            .with_help("the left of `=` must be a variable or an indexed element")),
+            .with_help("the left of `=` must be a variable")),
     }
 }
 
 fn target_span(target: &AssignmentTarget) -> Span {
     match target {
         AssignmentTarget::Variable(name) => name.span,
-        AssignmentTarget::Element { collection, .. } => collection.span,
     }
 }
 
@@ -585,7 +534,7 @@ fn precedence_of(token: &Token) -> Precedence {
         }
         Token::Plus | Token::Minus => Precedence::Sum,
         Token::Star | Token::Slash | Token::Percent => Precedence::Product,
-        Token::LeftParenthesis | Token::LeftBracket => Precedence::Call,
+        Token::LeftParenthesis => Precedence::Call,
         _ => Precedence::Lowest,
     }
 }

@@ -307,7 +307,6 @@ impl Compiler {
                         // We'll decide it later. This comment is here just for book-keeping.
                         Ok(())
                     }
-                    _ => todo!("Index assignment not implemented;"),
                 }
             }
             ExpressionKind::Call { callee, arguments } => match &callee.kind {

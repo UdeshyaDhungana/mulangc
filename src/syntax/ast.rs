@@ -63,12 +63,6 @@ pub enum ExpressionKind {
     Text(String),
     Boolean(bool),
 
-    Array(Vec<Expression>),
-    /// Key/value pairs in source order. A `Vec` rather than a map because two
-    /// syntactically distinct keys can still evaluate to the same string, and
-    /// deciding what that means belongs to evaluation, not parsing.
-    HashMap(Vec<(Expression, Expression)>),
-
     UnaryOperation {
         operator: UnaryOperator,
         operand: Box<Expression>,
@@ -82,10 +76,6 @@ pub enum ExpressionKind {
     Assignment {
         target: AssignmentTarget,
         value: Box<Expression>,
-    },
-    Index {
-        collection: Box<Expression>,
-        index: Box<Expression>,
     },
     Call {
         callee: Box<Expression>,
@@ -125,16 +115,12 @@ pub struct ConditionalBranch {
     pub consequence: Block,
 }
 
-/// The left side of an assignment. Restricting this to the two forms that can
+/// The left side of an assignment. Restricting this to the one form that can
 /// actually name a storage location means the interpreter never has to ask
 /// whether `2 + 2 = 5` is meaningful.
 #[derive(Clone, Debug)]
 pub enum AssignmentTarget {
     Variable(Identifier),
-    Element {
-        collection: Box<Expression>,
-        index: Box<Expression>,
-    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -276,24 +262,6 @@ fn write_expression(
         ExpressionKind::Boolean(true) => formatter.write_str("sacho_muji"),
         ExpressionKind::Boolean(false) => formatter.write_str("jhut_muji"),
 
-        ExpressionKind::Array(elements) => {
-            formatter.write_str("[")?;
-            write_separated(formatter, elements, depth, write_expression)?;
-            formatter.write_str("]")
-        }
-        ExpressionKind::HashMap(pairs) => {
-            formatter.write_str("{")?;
-            for (position, (key, value)) in pairs.iter().enumerate() {
-                if position > 0 {
-                    formatter.write_str(", ")?;
-                }
-                write_expression(formatter, key, depth)?;
-                formatter.write_str(": ")?;
-                write_expression(formatter, value, depth)?;
-            }
-            formatter.write_str("}")
-        }
-
         ExpressionKind::UnaryOperation { operator, operand } => {
             write!(formatter, "({operator}")?;
             write_expression(formatter, operand, depth)?;
@@ -314,22 +282,10 @@ fn write_expression(
             formatter.write_str("(")?;
             match target {
                 AssignmentTarget::Variable(name) => write!(formatter, "{name}")?,
-                AssignmentTarget::Element { collection, index } => {
-                    write_expression(formatter, collection, depth)?;
-                    formatter.write_str("[")?;
-                    write_expression(formatter, index, depth)?;
-                    formatter.write_str("]")?;
-                }
             }
             formatter.write_str(" = ")?;
             write_expression(formatter, value, depth)?;
             formatter.write_str(")")
-        }
-        ExpressionKind::Index { collection, index } => {
-            write_expression(formatter, collection, depth)?;
-            formatter.write_str("[")?;
-            write_expression(formatter, index, depth)?;
-            formatter.write_str("]")
         }
         ExpressionKind::Call { callee, arguments } => {
             write_expression(formatter, callee, depth)?;

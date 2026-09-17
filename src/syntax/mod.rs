@@ -84,8 +84,8 @@ mod tests {
     }
 
     #[test]
-    fn calls_and_indexes_chain() {
-        assert_eq!(reprint("f(1)[2](3);"), "f(1)[2](3);");
+    fn calls_chain() {
+        assert_eq!(reprint("f(1)(2)(3);"), "f(1)(2)(3);");
     }
 
     #[test]
@@ -93,10 +93,13 @@ mod tests {
         assert_eq!(reprint("-a * b;"), "((-a) * b);");
     }
 
+    /// Arrays and hash maps are gone, so `[`, `]` and `:` are no longer part of
+    /// the language at all — they fail in the lexer rather than the parser.
     #[test]
-    fn parses_an_empty_array_and_hash_map() {
-        assert_eq!(reprint("[];"), "[];");
-        assert_eq!(reprint("{};"), "{};");
+    fn rejects_array_and_hash_map_syntax() {
+        assert_eq!(first_error("[1, 2];"), "unrecognised character `[`");
+        assert_eq!(first_error("a[0];"), "unrecognised character `[`");
+        assert_eq!(first_error("{\"a\": 1};"), "unrecognised character `:`");
     }
 
     #[test]

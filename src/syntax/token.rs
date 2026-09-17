@@ -44,13 +44,10 @@ pub enum Token {
 
     Comma,
     Semicolon,
-    Colon,
     LeftParenthesis,
     RightParenthesis,
     LeftBrace,
     RightBrace,
-    LeftBracket,
-    RightBracket,
 
     EndOfInput,
 }
@@ -145,13 +142,10 @@ impl fmt::Display for Token {
 
             Token::Comma => ",",
             Token::Semicolon => ";",
-            Token::Colon => ":",
             Token::LeftParenthesis => "(",
             Token::RightParenthesis => ")",
             Token::LeftBrace => "{",
             Token::RightBrace => "}",
-            Token::LeftBracket => "[",
-            Token::RightBracket => "]",
 
             Token::EndOfInput => "",
         };
