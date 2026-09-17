@@ -11,6 +11,12 @@ use crate::{
     },
 };
 
+/// Stack a thread must have to run the compiler.
+///
+/// Code generation recurses over the AST, so deeply nested source needs room to
+/// walk. Generous rather than measured: it costs address space, not memory.
+pub const REQUIRED_STACK_BYTES: usize = 64 * 1024 * 1024;
+
 /// One 64-bit word per local. This grows once values carry a type tag.
 const SLOT_SIZE: usize = 8;
 

@@ -1,34 +1,32 @@
-//! `mulang [file.muji]` — run a program, or start an interactive session.
+//! `mulang program.muji` — compile a program to macOS ARM64 assembly.
 
-use std::io::{self, Write};
+use std::io;
 use std::path::Path;
 use std::process::ExitCode;
 use std::thread;
 
+use mulang::compiler::{Compiler, REQUIRED_STACK_BYTES};
 use mulang::diagnostics::render_all;
-use mulang::repl::Repl;
-use mulang::runtime::REQUIRED_STACK_BYTES;
-use mulang::runtime::compiler::Compiler;
 use mulang::syntax;
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
 
     let work = move || match arguments.as_slice() {
-        [] => start_session(),
         [path] => compile_file(path),
         _ => {
-            eprintln!("usage: mulang [program.muji]");
+            eprintln!("usage: mulang program.muji");
             ExitCode::FAILURE
         }
     };
 
-    // The main thread's stack is not ours to size, so evaluation gets one that is.
+    // The main thread's stack is not ours to size, so code generation gets one
+    // that is.
     thread::Builder::new()
         .stack_size(REQUIRED_STACK_BYTES)
         .spawn(work)
-        .and_then(|interpreter_thread| {
-            interpreter_thread
+        .and_then(|compiler_thread| {
+            compiler_thread
                 .join()
                 .map_err(|_| io::Error::other("the compiler panicked"))
         })
@@ -77,23 +75,6 @@ fn compile_file(path: &str) -> ExitCode {
         Ok(_) => ExitCode::SUCCESS,
         Err(diagnostic) => {
             eprint!("{}", diagnostic.render(&source, path));
-            return ExitCode::FAILURE;
-        }
-    }
-}
-
-fn start_session() -> ExitCode {
-    let user = std::env::var("USER").unwrap_or_else(|_| "मुजी".to_owned());
-    println!("नमस्कार {user} मुजी!");
-    println!("यो \"मुजी\" भाषा हो। तल लेख् मुजी 👇");
-
-    let mut input = io::stdin().lock();
-    let mut output = io::stdout();
-
-    match Repl::new().run(&mut input, &mut output) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            let _ = writeln!(io::stderr(), "mulang: {error}");
             ExitCode::FAILURE
         }
     }

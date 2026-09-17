@@ -4,12 +4,18 @@ A toolchain for the **muji** programming language, written in Rust. The
 language is unchanged from [muji-lang](https://github.com/UdeshyaDhungana/muji-lang);
 this is a rewrite of the implementation.
 
+Compiles to macOS ARM64 assembly. `mulang program.muji` writes `program.s`,
+which you then assemble and link:
+
 ```bash
 cargo build --release
 
-./target/release/mulang                     # interactive session
-./target/release/mulang examples/sum.muji   # run a program
+./target/release/mulang program.muji
+clang -o program program.s
+./program
 ```
+
+`./test.sh` does all three for `test.muji`.
 
 ## The language
 
@@ -99,20 +105,13 @@ src/
     token.rs           the lexical vocabulary; the only place keywords are spelled
     ast.rs             node types, and printing them back as source
     parser.rs          Pratt parser, with error recovery
-  runtime/           a Program in, a Value out
-    value.rs           what a running program manipulates
-    scope.rs           bindings, and the chain of enclosing scopes
-    operations.rs      what the operators mean
-    builtins.rs        the builtin table
-    interpreter.rs     the tree walk
-  repl.rs            the interactive session
+  compiler.rs        a Program in, macOS ARM64 assembly out
   main.rs            the command line
 ```
 
-Each layer is reachable only through one entry point — `syntax::parse`,
-`runtime::Interpreter` — so a compiler back end can sit beside the interpreter
-and consume the same `Program`, and the front end can gain source maps or
-error recovery without anything downstream noticing.
+Each layer is reachable through one entry point — `syntax::parse` and
+`compiler::Compiler` — so the front end can gain source maps or error recovery
+without anything downstream noticing.
 
 Every node carries the span it was parsed from, so errors point at source:
 
@@ -130,8 +129,7 @@ error: division by zero
 cargo test
 ```
 
-Unit tests sit next to what they cover; `tests/programs.rs` runs whole programs,
-including every file in `examples/`, and checks what they print.
+Unit tests sit next to what they cover.
 
 ## TODOs
 - [x] **Unary** — `-x` → `neg x0, x0`. `!x` → `cmp x0, #0` then `cset x0, eq`.

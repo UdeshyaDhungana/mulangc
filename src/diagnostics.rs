@@ -61,7 +61,7 @@ impl Diagnostic {
     /// Renders the diagnostic against the source it was produced from.
     ///
     /// `origin` labels where the source came from — a file path, or something
-    /// like `<repl>` for text that was never on disk.
+    /// like `<stdin>` for text that was never on disk.
     pub fn render(&self, source: &str, origin: &str) -> String {
         let location = SourceLocation::of(source, self.span.start);
         let gutter_width = location.line_number.to_string().len();
