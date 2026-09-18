@@ -1,0 +1,34 @@
+$ Every arm of a yedi_muji / nabhae_muji / nabhae_chikne chain, plus a
+  bare yedi_muji with no alternative. $
+
+thoos_muji positive = 5;
+thoos_muji zero = 0;
+thoos_muji negative = -5;
+
+yedi_muji (positive > 0) {
+    bhan_muji(1);
+} nabhae_muji (positive < 0) {
+    bhan_muji(2);
+} nabhae_chikne {
+    bhan_muji(3);
+}
+
+yedi_muji (negative > 0) {
+    bhan_muji(1);
+} nabhae_muji (negative < 0) {
+    bhan_muji(2);
+} nabhae_chikne {
+    bhan_muji(3);
+}
+
+yedi_muji (zero > 0) {
+    bhan_muji(1);
+} nabhae_muji (zero < 0) {
+    bhan_muji(2);
+} nabhae_chikne {
+    bhan_muji(3);
+}
+
+yedi_muji (positive == 5) {
+    bhan_muji(4);
+}

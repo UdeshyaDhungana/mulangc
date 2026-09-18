@@ -1,0 +1,12 @@
+$ The six relational operators, equality, and boolean literals.
+  Booleans print as 1 and 0 because bhan_muji takes a raw integer. $
+
+bhan_muji(1 < 2);
+bhan_muji(2 < 1);
+bhan_muji(2 <= 2);
+bhan_muji(3 > 2);
+bhan_muji(2 >= 3);
+bhan_muji(2 == 2);
+bhan_muji(2 != 2);
+bhan_muji(sacho_muji);
+bhan_muji(jhut_muji);

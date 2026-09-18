@@ -1,0 +1,10 @@
+$ ghuma_muji accumulating 0 + 1 + 2 + 3 + 4, with the loop variable
+  declared in the header. $
+
+thoos_muji t = 0;
+
+ghuma_muji (thoos_muji i = 0; i < 5; i = i + 1) {
+    t = t + i;
+}
+
+bhan_muji(t);

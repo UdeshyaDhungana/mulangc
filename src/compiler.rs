@@ -115,6 +115,20 @@ impl Compiler {
         self.emit_line(&format!("cset x0, {condition}"));
     }
 
+    /// Push the value of an expression that does not have one. Every
+    /// expression must leave exactly one value on the stack, so the ones that
+    /// produce nothing useful still push a placeholder for their consumer to discard.
+    fn emit_push_unit(&mut self) {
+        self.emit_line("mov x0, #0");
+        self.emit_line("str x0, [sp, #-16]!");
+    }
+
+    /// Throw away the value on top of the stack, for an expression evaluated
+    /// only for its side effect.
+    fn emit_discard(&mut self) {
+        self.emit_line("add sp, sp, #16");
+    }
+
     pub fn compile(&mut self, program: &Program) -> Result<(), Diagnostic> {
         self.emit_preamble();
         // Very much later in our lifetime, we'd witness linking, and include and everythang
@@ -166,6 +180,7 @@ impl Compiler {
             }
             StatementKind::Expression(expression) => {
                 self.emit_expression_evaluation_assembly_and_push_evaluated(expression)?;
+                self.emit_discard();
                 Ok(())
             }
         }
@@ -306,11 +321,10 @@ impl Compiler {
 
                         self.emit_line("ldr x0, [sp], #16");
                         self.emit_line(&format!("str x0, [x29, #{offset}]"));
-                        // According to the current specification, we classify assignment as an expression
-                        // Which should leave value on the top of the stack
-                        // However, this one doesn't
-                        // The specification isn't clear yet.
-                        // We'll decide it later. This comment is here just for book-keeping.
+                        // An assignment is an expression whose value is the
+                        // value assigned, so `x = y = 3` works and binds to the
+                        // right. `x0` still holds it, so push it back.
+                        self.emit_line("str x0, [sp, #-16]!");
                         Ok(())
                     }
                 }
@@ -344,6 +358,9 @@ impl Compiler {
                             )?;
                             self.emit_line("ldr x0, [sp], #16");
                             self.emit_line("bl _bhan_muji");
+                            // `bhan_muji` prints and yields nothing, and the
+                            // call has clobbered `x0` anyway.
+                            self.emit_push_unit();
                             Ok(())
                         }
                         BuiltinFunctions::Abs => todo!("abs not implemented"),
@@ -387,6 +404,10 @@ impl Compiler {
                 }
 
                 self.emit_outer_level_line(&format!("{if_stmt_end_label}:"));
+                // A conditional has no value. It stops being an expression at
+                // all once control flow moves to the statement side, and this
+                // placeholder goes away with it.
+                self.emit_push_unit();
                 Ok(())
             }
             ExpressionKind::While { condition, body } => {
@@ -405,6 +426,8 @@ impl Compiler {
                 self.pop_frame();
                 self.emit_line(&format!("b {while_start_label}"));
                 self.emit_outer_level_line(&format!("{while_end_label}:"));
+                // As with a conditional: no value, placeholder for now.
+                self.emit_push_unit();
                 Ok(())
             }
             ExpressionKind::For {
@@ -438,10 +461,17 @@ impl Compiler {
                 }
                 self.pop_frame();
                 self.emit_expression_evaluation_assembly_and_push_evaluated(update)?;
+                // The update runs for its effect, once per iteration. Leaving
+                // its value behind walks the stack downwards for as long as the
+                // loop runs.
+                self.emit_discard();
                 self.emit_line(&format!("b {while_condition_label}"));
                 self.emit_outer_level_line(&format!("{while_end_label}:"));
                 self.pop_frame();
 
+                // After `pop_frame`, so the placeholder lands in the enclosing
+                // frame rather than being cut away with this one.
+                self.emit_push_unit();
                 Ok(())
             }
             _ => todo!("Other types of expressions not implemented;"),

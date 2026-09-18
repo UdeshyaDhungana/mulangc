@@ -1,0 +1,9 @@
+$ Binary arithmetic, precedence, grouping, and unary minus. $
+
+bhan_muji(2 + 3 * 4);
+bhan_muji((2 + 3) * 4);
+bhan_muji(10 - 3 - 2);
+bhan_muji(17 / 5);
+bhan_muji(17 % 5);
+bhan_muji(-7 + 2);
+bhan_muji(-(3 * 4));

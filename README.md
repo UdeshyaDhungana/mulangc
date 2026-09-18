@@ -19,7 +19,7 @@ clang -o program program.s
 
 ## The language
 
-### Variables
+### Variables (Statement)
 
 ```muji
 thoos_muji x = 43;
@@ -27,7 +27,7 @@ thoos_muji x = 43;
 
 Types: integer, decimal, string, boolean.
 
-### Functions
+### Functions (Yet to implement manual functions) (Statement)
 
 ```muji
 thoos_muji add = kaam_gar_muji(x, y) {
@@ -48,25 +48,26 @@ adder(2)(3);    $ 5 $
 A function yields its `patha_muji` value, or its last statement's value if it
 has no `patha_muji`.
 
-### Booleans and conditionals
+### Booleans and conditionals (Statements)
 
 ```muji
 thoos_muji yes = sacho_muji;
 thoos_muji no = jhut_muji;
 
+thoos_muji n = 0;
 yedi_muji (n > 0) {
-    bhan_muji("Positive");
+    bhan_muji(1);
 } nabhae_muji (n < 0) {
-    bhan_muji("Negative");
+    bhan_muji(-1);
 } nabhae_chikne {
-    bhan_muji("Zero!");
+    bhan_muji(0);
 }
 ```
 
 Both `nabhae_muji` and `nabhae_chikne` are optional. Only `jhut_muji` and
 `khali_muji` are false — `0` and `""` are both true.
 
-### Loops
+### Loops (Statements)
 
 ```muji
 jaba_samma_muji (i < 420) {
@@ -129,7 +130,19 @@ error: division by zero
 cargo test
 ```
 
-Unit tests sit next to what they cover.
+Unit tests sit next to what they cover: the lexer, the parser, and diagnostics.
+
+`tests/programs/` is the end-to-end suite, and the only thing that exercises
+code generation. Each `NAME.muji` has a `NAME.out` holding the exact stdout it
+must produce, and optionally a `NAME.exit` holding its exit code (default `0`).
+`tests/programs.rs` compiles each one in its own scratch directory under
+`target/muji-tests/`, assembles it with `clang`, runs it, and compares. The
+artifacts are left in place, so a failing program's generated assembly is right
+there to read.
+
+Adding a case is two files and no code. **Requires `clang` on your path.**
+
+`./test.sh` is the manual loop for a single program, `test.muji`.
 
 ## TODOs
 - [x] **Unary** — `-x` → `neg x0, x0`. `!x` → `cmp x0, #0` then `cset x0, eq`.
