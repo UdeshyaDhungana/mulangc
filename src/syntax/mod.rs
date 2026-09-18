@@ -102,10 +102,13 @@ mod tests {
         assert_eq!(first_error("{\"a\": 1};"), "unrecognised character `:`");
     }
 
+    /// A conditional is a statement, so it ends at its `}` with no `;`.
     #[test]
     fn parses_a_conditional_chain_without_a_fallback() {
-        let source = "yedi_muji (a) { 1; } nabhae_muji (b) { 2; }";
-        assert!(reprint(source).contains("nabhae_muji"));
+        assert_eq!(
+            reprint("yedi_muji (a) { 1; } nabhae_muji (b) { 2; }"),
+            "yedi_muji (a) {\n    1;\n} nabhae_muji (b) {\n    2;\n}"
+        );
     }
 
     #[test]
@@ -118,11 +121,46 @@ mod tests {
 
     #[test]
     fn parses_both_for_loop_initialiser_forms() {
-        assert!(
-            reprint("ghuma_muji (thoos_muji i = 0; i < 3; i = i + 1) { i; }")
-                .contains("thoos_muji i = 0;")
+        assert_eq!(
+            reprint("ghuma_muji (thoos_muji i = 0; i < 3; i = i + 1) { i; }"),
+            "ghuma_muji (thoos_muji i = 0; (i < 3); (i = (i + 1))) {\n    i;\n}"
         );
-        assert!(reprint("ghuma_muji (i = 0; i < 3; i = i + 1) { i; }").contains("(i = 0);"));
+        assert_eq!(
+            reprint("ghuma_muji (i = 0; i < 3; i = i + 1) { i; }"),
+            "ghuma_muji ((i = 0); (i < 3); (i = (i + 1))) {\n    i;\n}"
+        );
+    }
+
+    /// Control flow sits on the statement side, so the Pratt driver never sees
+    /// a conditional as an operand: this is an if-statement followed by the
+    /// separate expression statement `(2);`, not a call with an `if` callee.
+    #[test]
+    fn a_conditional_is_never_the_callee_of_a_call() {
+        let program = parse("yedi_muji (a) { 1; } (2);").expect("should parse");
+
+        assert_eq!(program.statements.len(), 2);
+        assert!(matches!(
+            program.statements[0].kind,
+            StatementKind::If { .. }
+        ));
+        assert!(matches!(
+            program.statements[1].kind,
+            StatementKind::Expression(..)
+        ));
+    }
+
+    /// A loop has no value, so anywhere an expression is required it is now a
+    /// syntax error rather than something the back end has to invent a value for.
+    #[test]
+    fn rejects_a_loop_where_an_expression_is_expected() {
+        assert_eq!(
+            first_error("thoos_muji x = jaba_samma_muji (a) {};"),
+            "expected an expression, found `jaba_samma_muji`"
+        );
+        assert_eq!(
+            first_error("jaba_samma_muji (a) { 1; } + 1;"),
+            "expected an expression, found `+`"
+        );
     }
 
     #[test]

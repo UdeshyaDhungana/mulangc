@@ -41,6 +41,23 @@ pub enum StatementKind {
     Return(Expression),
     /// An expression evaluated for its value, its effect, or both.
     Expression(Expression),
+
+    /// `yedi_muji` with its `nabhae_muji` chain and optional `nabhae_chikne`.
+    If {
+        /// The `yedi_muji` branch first, then each `nabhae_muji` in order.
+        branches: Vec<ConditionalBranch>,
+        fallback: Option<Block>,
+    },
+    While {
+        condition: Box<Expression>,
+        body: Block,
+    },
+    For {
+        initialiser: Option<Box<Statement>>,
+        condition: Box<Expression>,
+        update: Box<Expression>,
+        body: Block,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -84,23 +101,6 @@ pub enum ExpressionKind {
     /// Shared behind an `Rc` so that building a closure at run time costs a
     /// refcount bump instead of a deep copy of the body.
     Function(Rc<FunctionDefinition>),
-
-    /// `yedi_muji` with its `nabhae_muji` chain and optional `nabhae_chikne`.
-    If {
-        /// The `yedi_muji` branch first, then each `nabhae_muji` in order.
-        branches: Vec<ConditionalBranch>,
-        fallback: Option<Block>,
-    },
-    While {
-        condition: Box<Expression>,
-        body: Block,
-    },
-    For {
-        initialiser: Option<Box<Statement>>,
-        condition: Box<Expression>,
-        update: Box<Expression>,
-        body: Block,
-    },
 }
 
 #[derive(Clone, Debug)]
@@ -239,6 +239,53 @@ fn write_statement(
             write_expression(formatter, expression, depth)?;
             formatter.write_str(";")
         }
+
+        // A block-bodied statement ends at its `}`; no `;` follows it, and
+        // `write_statements` supplies the newline.
+        StatementKind::If { branches, fallback } => {
+            for (position, branch) in branches.iter().enumerate() {
+                let keyword = if position == 0 {
+                    "yedi_muji"
+                } else {
+                    " nabhae_muji"
+                };
+                write!(formatter, "{keyword} (")?;
+                write_expression(formatter, &branch.condition, depth)?;
+                formatter.write_str(") ")?;
+                write_block(formatter, &branch.consequence, depth)?;
+            }
+            match fallback {
+                Some(block) => {
+                    formatter.write_str(" nabhae_chikne ")?;
+                    write_block(formatter, block, depth)
+                }
+                None => Ok(()),
+            }
+        }
+        StatementKind::While { condition, body } => {
+            formatter.write_str("jaba_samma_muji (")?;
+            write_expression(formatter, condition, depth)?;
+            formatter.write_str(") ")?;
+            write_block(formatter, body, depth)
+        }
+        StatementKind::For {
+            initialiser,
+            condition,
+            update,
+            body,
+        } => {
+            formatter.write_str("ghuma_muji (")?;
+            match initialiser {
+                Some(statement) => write_statement(formatter, statement, depth)?,
+                None => formatter.write_str(";")?,
+            }
+            formatter.write_str(" ")?;
+            write_expression(formatter, condition, depth)?;
+            formatter.write_str("; ")?;
+            write_expression(formatter, update, depth)?;
+            formatter.write_str(") ")?;
+            write_block(formatter, body, depth)
+        }
     }
 }
 
@@ -303,51 +350,6 @@ fn write_expression(
             )?;
             formatter.write_str(") ")?;
             write_block(formatter, &definition.body, depth)
-        }
-
-        ExpressionKind::If { branches, fallback } => {
-            for (position, branch) in branches.iter().enumerate() {
-                let keyword = if position == 0 {
-                    "yedi_muji"
-                } else {
-                    " nabhae_muji"
-                };
-                write!(formatter, "{keyword} (")?;
-                write_expression(formatter, &branch.condition, depth)?;
-                formatter.write_str(") ")?;
-                write_block(formatter, &branch.consequence, depth)?;
-            }
-            match fallback {
-                Some(block) => {
-                    formatter.write_str(" nabhae_chikne ")?;
-                    write_block(formatter, block, depth)
-                }
-                None => Ok(()),
-            }
-        }
-        ExpressionKind::While { condition, body } => {
-            formatter.write_str("jaba_samma_muji (")?;
-            write_expression(formatter, condition, depth)?;
-            formatter.write_str(") ")?;
-            write_block(formatter, body, depth)
-        }
-        ExpressionKind::For {
-            initialiser,
-            condition,
-            update,
-            body,
-        } => {
-            formatter.write_str("ghuma_muji (")?;
-            match initialiser {
-                Some(statement) => write_statement(formatter, statement, depth)?,
-                None => formatter.write_str(";")?,
-            }
-            formatter.write_str(" ")?;
-            write_expression(formatter, condition, depth)?;
-            formatter.write_str("; ")?;
-            write_expression(formatter, update, depth)?;
-            formatter.write_str(") ")?;
-            write_block(formatter, body, depth)
         }
     }
 }

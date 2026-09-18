@@ -98,6 +98,9 @@ impl Parser<'_> {
         match self.current_token() {
             Token::Declare => self.parse_declaration(),
             Token::Return => self.parse_return(),
+            Token::If => self.parse_if(),
+            Token::While => self.parse_while(),
+            Token::For => self.parse_for(),
             _ => self.parse_expression_statement(),
         }
     }
@@ -129,8 +132,102 @@ impl Parser<'_> {
         })
     }
 
-    /// An expression on its own. The trailing `;` is optional, which is what
-    /// lets a block or a loop stand as the last thing in a file.
+    fn parse_if(&mut self) -> Result<Statement, Diagnostic> {
+        let start = self.expect(Token::If)?;
+        let mut branches = vec![self.parse_conditional_branch()?];
+
+        while self.is_at(&Token::ElseIf) {
+            self.advance();
+            branches.push(self.parse_conditional_branch()?);
+        }
+
+        let fallback = if self.is_at(&Token::Else) {
+            self.advance();
+            Some(self.parse_block()?)
+        } else {
+            None
+        };
+
+        let end = fallback
+            .as_ref()
+            .map_or_else(|| last_branch_span(&branches), |block| block.span);
+
+        Ok(Statement {
+            kind: StatementKind::If { branches, fallback },
+            span: start.joined_with(end),
+        })
+    }
+
+    /// The `(condition) { … }` shared by `yedi_muji` and `nabhae_muji`.
+    fn parse_conditional_branch(&mut self) -> Result<ConditionalBranch, Diagnostic> {
+        self.expect(Token::LeftParenthesis)?;
+        let condition = self.parse_expression(Precedence::Lowest)?;
+        self.expect(Token::RightParenthesis)?;
+        let consequence = self.parse_block()?;
+
+        Ok(ConditionalBranch {
+            condition,
+            consequence,
+        })
+    }
+
+    fn parse_while(&mut self) -> Result<Statement, Diagnostic> {
+        let start = self.expect(Token::While)?;
+        self.expect(Token::LeftParenthesis)?;
+        let condition = self.parse_expression(Precedence::Lowest)?;
+        self.expect(Token::RightParenthesis)?;
+        let body = self.parse_block()?;
+
+        Ok(Statement {
+            span: start.joined_with(body.span),
+            kind: StatementKind::While {
+                condition: Box::new(condition),
+                body,
+            },
+        })
+    }
+
+    fn parse_for(&mut self) -> Result<Statement, Diagnostic> {
+        let start = self.expect(Token::For)?;
+        self.expect(Token::LeftParenthesis)?;
+
+        // The header's own `;` separators are mandatory, unlike the optional
+        // terminator of a free-standing expression statement.
+        let initialiser = match self.current_token() {
+            Token::Semicolon => {
+                self.advance();
+                None
+            }
+            Token::Declare => Some(Box::new(self.parse_declaration()?)),
+            _ => {
+                let expression = self.parse_expression(Precedence::Lowest)?;
+                let end = self.expect(Token::Semicolon)?;
+                Some(Box::new(Statement {
+                    span: expression.span.joined_with(end),
+                    kind: StatementKind::Expression(expression),
+                }))
+            }
+        };
+
+        let condition = self.parse_expression(Precedence::Lowest)?;
+        self.expect(Token::Semicolon)?;
+        let update = self.parse_expression(Precedence::Lowest)?;
+        self.expect(Token::RightParenthesis)?;
+        let body = self.parse_block()?;
+
+        Ok(Statement {
+            span: start.joined_with(body.span),
+            kind: StatementKind::For {
+                initialiser,
+                condition: Box::new(condition),
+                update: Box::new(update),
+                body,
+            },
+        })
+    }
+
+    /// An expression on its own. The trailing `;` is still optional here;
+    /// making it mandatory is the next step.
     fn parse_expression_statement(&mut self) -> Result<Statement, Diagnostic> {
         let expression = self.parse_expression(Precedence::Lowest)?;
         let mut span = expression.span;
@@ -206,9 +303,6 @@ impl Parser<'_> {
             Token::Minus | Token::Bang => return self.parse_unary(),
             Token::LeftParenthesis => return self.parse_grouping(),
             Token::Function => return self.parse_function(),
-            Token::If => return self.parse_if(),
-            Token::While => return self.parse_while(),
-            Token::For => return self.parse_for(),
 
             _ => return Err(self.error_at_current("expected an expression")),
         };
@@ -310,100 +404,6 @@ impl Parser<'_> {
         Ok(Expression {
             span: start.joined_with(body.span),
             kind: ExpressionKind::Function(Rc::new(FunctionDefinition { parameters, body })),
-        })
-    }
-
-    fn parse_if(&mut self) -> Result<Expression, Diagnostic> {
-        let start = self.expect(Token::If)?;
-        let mut branches = vec![self.parse_conditional_branch()?];
-
-        while self.is_at(&Token::ElseIf) {
-            self.advance();
-            branches.push(self.parse_conditional_branch()?);
-        }
-
-        let fallback = if self.is_at(&Token::Else) {
-            self.advance();
-            Some(self.parse_block()?)
-        } else {
-            None
-        };
-
-        let end = fallback
-            .as_ref()
-            .map_or_else(|| last_branch_span(&branches), |block| block.span);
-
-        Ok(Expression {
-            kind: ExpressionKind::If { branches, fallback },
-            span: start.joined_with(end),
-        })
-    }
-
-    /// The `(condition) { … }` shared by `yedi_muji` and `nabhae_muji`.
-    fn parse_conditional_branch(&mut self) -> Result<ConditionalBranch, Diagnostic> {
-        self.expect(Token::LeftParenthesis)?;
-        let condition = self.parse_expression(Precedence::Lowest)?;
-        self.expect(Token::RightParenthesis)?;
-        let consequence = self.parse_block()?;
-
-        Ok(ConditionalBranch {
-            condition,
-            consequence,
-        })
-    }
-
-    fn parse_while(&mut self) -> Result<Expression, Diagnostic> {
-        let start = self.expect(Token::While)?;
-        self.expect(Token::LeftParenthesis)?;
-        let condition = self.parse_expression(Precedence::Lowest)?;
-        self.expect(Token::RightParenthesis)?;
-        let body = self.parse_block()?;
-
-        Ok(Expression {
-            span: start.joined_with(body.span),
-            kind: ExpressionKind::While {
-                condition: Box::new(condition),
-                body,
-            },
-        })
-    }
-
-    fn parse_for(&mut self) -> Result<Expression, Diagnostic> {
-        let start = self.expect(Token::For)?;
-        self.expect(Token::LeftParenthesis)?;
-
-        // The header's own `;` separators are mandatory, unlike the optional
-        // terminator of a free-standing expression statement.
-        let initialiser = match self.current_token() {
-            Token::Semicolon => {
-                self.advance();
-                None
-            }
-            Token::Declare => Some(Box::new(self.parse_declaration()?)),
-            _ => {
-                let expression = self.parse_expression(Precedence::Lowest)?;
-                let end = self.expect(Token::Semicolon)?;
-                Some(Box::new(Statement {
-                    span: expression.span.joined_with(end),
-                    kind: StatementKind::Expression(expression),
-                }))
-            }
-        };
-
-        let condition = self.parse_expression(Precedence::Lowest)?;
-        self.expect(Token::Semicolon)?;
-        let update = self.parse_expression(Precedence::Lowest)?;
-        self.expect(Token::RightParenthesis)?;
-        let body = self.parse_block()?;
-
-        Ok(Expression {
-            span: start.joined_with(body.span),
-            kind: ExpressionKind::For {
-                initialiser,
-                condition: Box::new(condition),
-                update: Box::new(update),
-                body,
-            },
         })
     }
 
@@ -520,7 +520,7 @@ fn target_span(target: &AssignmentTarget) -> Span {
 fn last_branch_span(branches: &[ConditionalBranch]) -> Span {
     branches
         .last()
-        .expect("an if expression always has at least the yedi_muji branch")
+        .expect("an if statement always has at least the yedi_muji branch")
         .consequence
         .span
 }

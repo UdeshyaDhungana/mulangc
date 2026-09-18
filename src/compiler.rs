@@ -183,6 +183,102 @@ impl Compiler {
                 self.emit_discard();
                 Ok(())
             }
+            StatementKind::If { branches, fallback } => {
+                let if_stmt_number = self.counter.next();
+                let if_stmt_end_label = format!("yedi_muji_{}_end", if_stmt_number);
+
+                for (idx, branch) in branches.iter().enumerate() {
+                    let current_label = format!("yedi_muji_{}_branch_{}", if_stmt_number, idx);
+                    let next_label = format!("yedi_muji_{}_branch_{}", if_stmt_number, idx + 1);
+
+                    self.emit_outer_level_line(&format!("{current_label}:"));
+                    self.emit_expression_evaluation_assembly_and_push_evaluated(&branch.condition)?;
+                    self.emit_line("ldr x0, [sp], #16");
+                    self.emit_line(&format!("cbz x0, {next_label}"));
+
+                    self.push_frame(frame_size_for_statements(&branch.consequence.statements));
+                    for statement in &branch.consequence.statements {
+                        self.emit_statement_assembly(statement)?;
+                    }
+                    self.pop_frame();
+                    self.emit_line(&format!("b {if_stmt_end_label}"));
+                }
+
+                self.emit_outer_level_line(&format!(
+                    "yedi_muji_{}_branch_{}:",
+                    if_stmt_number,
+                    branches.len()
+                ));
+
+                if let Some(fallback) = fallback {
+                    self.push_frame(frame_size_for_statements(&fallback.statements));
+                    for statement in &fallback.statements {
+                        self.emit_statement_assembly(statement)?;
+                    }
+                    self.pop_frame();
+                }
+
+                self.emit_outer_level_line(&format!("{if_stmt_end_label}:"));
+                Ok(())
+            }
+            StatementKind::While { condition, body } => {
+                let while_stmt_number = self.counter.next();
+                let while_start_label = &format!("while_{}_start", while_stmt_number);
+                let while_end_label = &format!("while_{}_end", while_stmt_number);
+
+                self.emit_outer_level_line(&format!("{while_start_label}:"));
+                self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
+                self.emit_line("ldr x0, [sp], #16");
+                self.emit_line(&format!("cbz x0, {while_end_label}"));
+                self.push_frame(frame_size_for_statements(&body.statements));
+                for statement in &body.statements {
+                    self.emit_statement_assembly(statement)?;
+                }
+                self.pop_frame();
+                self.emit_line(&format!("b {while_start_label}"));
+                self.emit_outer_level_line(&format!("{while_end_label}:"));
+                Ok(())
+            }
+            StatementKind::For {
+                initialiser,
+                condition,
+                update,
+                body,
+            } => {
+                // Option::iter yields one item or none, so a header without a
+                // declaration collects to an empty Vec and reserves no slot.
+                let initialiser_statements: Vec<Statement> = initialiser
+                    .iter()
+                    .map(|statement| (**statement).clone())
+                    .collect();
+
+                self.push_frame(frame_size_for_statements(&initialiser_statements));
+
+                if let Some(initialiser) = initialiser {
+                    self.emit_statement_assembly(initialiser)?;
+                }
+                let for_stmt_counter = self.counter.next();
+                let while_condition_label = format!("for_{}_start", for_stmt_counter);
+                let while_end_label = format!("for_{}_end", for_stmt_counter);
+                self.emit_outer_level_line(&format!("{while_condition_label}:"));
+                self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
+                self.emit_line("ldr x0, [sp], #16");
+                self.emit_line(&format!("cbz x0, {while_end_label}"));
+                self.push_frame(frame_size_for_statements(&body.statements));
+                for statement in &body.statements {
+                    self.emit_statement_assembly(statement)?;
+                }
+                self.pop_frame();
+                self.emit_expression_evaluation_assembly_and_push_evaluated(update)?;
+                // The update runs for its effect, once per iteration. Leaving
+                // its value behind walks the stack downwards for as long as the
+                // loop runs.
+                self.emit_discard();
+                self.emit_line(&format!("b {while_condition_label}"));
+                self.emit_outer_level_line(&format!("{while_end_label}:"));
+                self.pop_frame();
+                Ok(())
+            }
         }
     }
 
@@ -368,112 +464,6 @@ impl Compiler {
                 }
                 _ => todo!("calling the result of an expression"),
             },
-            ExpressionKind::If { branches, fallback } => {
-                let if_stmt_number = self.counter.next();
-                let if_stmt_end_label = format!("yedi_muji_{}_end", if_stmt_number);
-
-                for (idx, branch) in branches.iter().enumerate() {
-                    let current_label = format!("yedi_muji_{}_branch_{}", if_stmt_number, idx);
-                    let next_label = format!("yedi_muji_{}_branch_{}", if_stmt_number, idx + 1);
-
-                    self.emit_outer_level_line(&format!("{current_label}:"));
-                    self.emit_expression_evaluation_assembly_and_push_evaluated(&branch.condition)?;
-                    self.emit_line("ldr x0, [sp], #16");
-                    self.emit_line(&format!("cbz x0, {next_label}"));
-
-                    self.push_frame(frame_size_for_statements(&branch.consequence.statements));
-                    for statement in &branch.consequence.statements {
-                        self.emit_statement_assembly(statement)?;
-                    }
-                    self.pop_frame();
-                    self.emit_line(&format!("b {if_stmt_end_label}"));
-                }
-
-                self.emit_outer_level_line(&format!(
-                    "yedi_muji_{}_branch_{}:",
-                    if_stmt_number,
-                    branches.len()
-                ));
-
-                if let Some(fallback) = fallback {
-                    self.push_frame(frame_size_for_statements(&fallback.statements));
-                    for statement in &fallback.statements {
-                        self.emit_statement_assembly(statement)?;
-                    }
-                    self.pop_frame();
-                }
-
-                self.emit_outer_level_line(&format!("{if_stmt_end_label}:"));
-                // A conditional has no value. It stops being an expression at
-                // all once control flow moves to the statement side, and this
-                // placeholder goes away with it.
-                self.emit_push_unit();
-                Ok(())
-            }
-            ExpressionKind::While { condition, body } => {
-                let while_stmt_number = self.counter.next();
-                let while_start_label = &format!("while_{}_start", while_stmt_number);
-                let while_end_label = &format!("while_{}_end", while_stmt_number);
-
-                self.emit_outer_level_line(&format!("{while_start_label}:"));
-                self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
-                self.emit_line("ldr x0, [sp], #16");
-                self.emit_line(&format!("cbz x0, {while_end_label}"));
-                self.push_frame(frame_size_for_statements(&body.statements));
-                for statement in &body.statements {
-                    self.emit_statement_assembly(statement)?;
-                }
-                self.pop_frame();
-                self.emit_line(&format!("b {while_start_label}"));
-                self.emit_outer_level_line(&format!("{while_end_label}:"));
-                // As with a conditional: no value, placeholder for now.
-                self.emit_push_unit();
-                Ok(())
-            }
-            ExpressionKind::For {
-                initialiser,
-                condition,
-                update,
-                body,
-            } => {
-                // Option::iter yields one item or none, so a header without a
-                // declaration collects to an empty Vec and reserves no slot.
-                let initialiser_statements: Vec<Statement> = initialiser
-                    .iter()
-                    .map(|statement| (**statement).clone())
-                    .collect();
-
-                self.push_frame(frame_size_for_statements(&initialiser_statements));
-
-                if let Some(initialiser) = initialiser {
-                    self.emit_statement_assembly(initialiser)?;
-                }
-                let for_stmt_counter = self.counter.next();
-                let while_condition_label = format!("for_{}_start", for_stmt_counter);
-                let while_end_label = format!("for_{}_end", for_stmt_counter);
-                self.emit_outer_level_line(&format!("{while_condition_label}:"));
-                self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
-                self.emit_line("ldr x0, [sp], #16");
-                self.emit_line(&format!("cbz x0, {while_end_label}"));
-                self.push_frame(frame_size_for_statements(&body.statements));
-                for statement in &body.statements {
-                    self.emit_statement_assembly(statement)?;
-                }
-                self.pop_frame();
-                self.emit_expression_evaluation_assembly_and_push_evaluated(update)?;
-                // The update runs for its effect, once per iteration. Leaving
-                // its value behind walks the stack downwards for as long as the
-                // loop runs.
-                self.emit_discard();
-                self.emit_line(&format!("b {while_condition_label}"));
-                self.emit_outer_level_line(&format!("{while_end_label}:"));
-                self.pop_frame();
-
-                // After `pop_frame`, so the placeholder lands in the enclosing
-                // frame rather than being cut away with this one.
-                self.emit_push_unit();
-                Ok(())
-            }
             _ => todo!("Other types of expressions not implemented;"),
         }
     }
