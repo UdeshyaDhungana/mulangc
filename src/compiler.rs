@@ -1,11 +1,11 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::format};
 
 use strum_macros::EnumString;
 
 use crate::{
     diagnostics::{Diagnostic, Span},
     syntax::{
-        AssignmentTarget, BinaryOperator, Expression,
+        AssignmentTarget, BinaryOperator, Block, Conditional, Else, Expression,
         ExpressionKind::{self},
         Program, Statement, StatementKind, UnaryOperator,
     },
@@ -118,14 +118,14 @@ impl Compiler {
     /// Push the value of an expression that does not have one. Every
     /// expression must leave exactly one value on the stack, so the ones that
     /// produce nothing useful still push a placeholder for their consumer to discard.
-    fn emit_push_unit(&mut self) {
+    fn push_void(&mut self) {
         self.emit_line("mov x0, #0");
         self.emit_line("str x0, [sp, #-16]!");
     }
 
     /// Throw away the value on top of the stack, for an expression evaluated
     /// only for its side effect.
-    fn emit_discard(&mut self) {
+    fn pop_void(&mut self) {
         self.emit_line("add sp, sp, #16");
     }
 
@@ -180,47 +180,10 @@ impl Compiler {
             }
             StatementKind::Expression(expression) => {
                 self.emit_expression_evaluation_assembly_and_push_evaluated(expression)?;
-                self.emit_discard();
+                self.pop_void();
                 Ok(())
             }
-            StatementKind::If { branches, fallback } => {
-                let if_stmt_number = self.counter.next();
-                let if_stmt_end_label = format!("yedi_{}_end", if_stmt_number);
-
-                for (idx, branch) in branches.iter().enumerate() {
-                    let current_label = format!("yedi_{}_branch_{}", if_stmt_number, idx);
-                    let next_label = format!("yedi_{}_branch_{}", if_stmt_number, idx + 1);
-
-                    self.emit_outer_level_line(&format!("{current_label}:"));
-                    self.emit_expression_evaluation_assembly_and_push_evaluated(&branch.condition)?;
-                    self.emit_line("ldr x0, [sp], #16");
-                    self.emit_line(&format!("cbz x0, {next_label}"));
-
-                    self.push_frame(frame_size_for_statements(&branch.consequence.statements));
-                    for statement in &branch.consequence.statements {
-                        self.emit_statement_assembly(statement)?;
-                    }
-                    self.pop_frame();
-                    self.emit_line(&format!("b {if_stmt_end_label}"));
-                }
-
-                self.emit_outer_level_line(&format!(
-                    "yedi_{}_branch_{}:",
-                    if_stmt_number,
-                    branches.len()
-                ));
-
-                if let Some(fallback) = fallback {
-                    self.push_frame(frame_size_for_statements(&fallback.statements));
-                    for statement in &fallback.statements {
-                        self.emit_statement_assembly(statement)?;
-                    }
-                    self.pop_frame();
-                }
-
-                self.emit_outer_level_line(&format!("{if_stmt_end_label}:"));
-                Ok(())
-            }
+            StatementKind::If(conditional) => self.emit_conditional_assembly(conditional),
             StatementKind::While { condition, body } => {
                 let while_stmt_number = self.counter.next();
                 let while_start_label = &format!("while_{}_start", while_stmt_number);
@@ -230,11 +193,7 @@ impl Compiler {
                 self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
                 self.emit_line("ldr x0, [sp], #16");
                 self.emit_line(&format!("cbz x0, {while_end_label}"));
-                self.push_frame(frame_size_for_statements(&body.statements));
-                for statement in &body.statements {
-                    self.emit_statement_assembly(statement)?;
-                }
-                self.pop_frame();
+                self.emit_block_assembly(body)?;
                 self.emit_line(&format!("b {while_start_label}"));
                 self.emit_outer_level_line(&format!("{while_end_label}:"));
                 Ok(())
@@ -264,22 +223,52 @@ impl Compiler {
                 self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
                 self.emit_line("ldr x0, [sp], #16");
                 self.emit_line(&format!("cbz x0, {while_end_label}"));
-                self.push_frame(frame_size_for_statements(&body.statements));
-                for statement in &body.statements {
-                    self.emit_statement_assembly(statement)?;
-                }
-                self.pop_frame();
+                self.emit_block_assembly(body)?;
                 self.emit_expression_evaluation_assembly_and_push_evaluated(update)?;
                 // The update runs for its effect, once per iteration. Leaving
                 // its value behind walks the stack downwards for as long as the
                 // loop runs.
-                self.emit_discard();
+                self.pop_void();
                 self.emit_line(&format!("b {while_condition_label}"));
                 self.emit_outer_level_line(&format!("{while_end_label}:"));
                 self.pop_frame();
                 Ok(())
             }
         }
+    }
+
+    fn emit_conditional_assembly(&mut self, conditional: &Conditional) -> Result<(), Diagnostic> {
+        let conditional_number = self.counter.next();
+        let else_label = format!("if_{conditional_number}_else");
+        let end_label = format!("if_{conditional_number}_end");
+
+        self.emit_expression_evaluation_assembly_and_push_evaluated(&conditional.condition)?;
+        self.emit_line("ldr x0, [sp], #16");
+        self.emit_line(&format!("cbz x0, {else_label}"));
+
+        self.emit_block_assembly(&conditional.then)?;
+        self.emit_line(&format!("b {end_label}"));
+
+        self.emit_outer_level_line(&format!("{else_label}:"));
+        match conditional.otherwise.as_deref() {
+            Some(Else::Block(block)) => self.emit_block_assembly(block)?,
+            Some(Else::If(conditional)) => self.emit_conditional_assembly(conditional)?,
+            None => {}
+        }
+
+        self.emit_outer_level_line(&format!("{end_label}:"));
+        Ok(())
+    }
+
+    /// A block's statements, in a frame of their own so its locals go out of
+    /// scope with it.
+    fn emit_block_assembly(&mut self, block: &Block) -> Result<(), Diagnostic> {
+        self.push_frame(frame_size_for_statements(&block.statements));
+        for statement in &block.statements {
+            self.emit_statement_assembly(statement)?;
+        }
+        self.pop_frame();
+        Ok(())
     }
 
     // Generate a sequence of statements to evaluate an expression and put the value on the top of the stack
@@ -456,7 +445,7 @@ impl Compiler {
                             self.emit_line("bl _bol");
                             // `bol` prints and yields nothing, and the call
                             // has clobbered `x0` anyway.
-                            self.emit_push_unit();
+                            self.push_void();
                             Ok(())
                         }
                         BuiltinFunctions::Abs => todo!("abs not implemented"),

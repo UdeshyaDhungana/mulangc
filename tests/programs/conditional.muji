@@ -7,7 +7,7 @@ thoos negative = -5;
 
 yedi (positive > 0) {
     bol(1);
-} nabhae (positive < 0) {
+} natra yedi (positive < 0) {
     bol(2);
 } natra {
     bol(3);
@@ -15,7 +15,7 @@ yedi (positive > 0) {
 
 yedi (negative > 0) {
     bol(1);
-} nabhae (negative < 0) {
+} natra yedi (negative < 0) {
     bol(2);
 } natra {
     bol(3);
@@ -23,7 +23,7 @@ yedi (negative > 0) {
 
 yedi (zero > 0) {
     bol(1);
-} nabhae (zero < 0) {
+} natra yedi (zero < 0) {
     bol(2);
 } natra {
     bol(3);
@@ -31,4 +31,10 @@ yedi (zero > 0) {
 
 yedi (positive == 5) {
     bol(4);
+}
+
+yedi(positive == -1) {
+    bol(1);
+} natra {
+    bol(5);
 }

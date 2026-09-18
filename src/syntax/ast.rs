@@ -42,12 +42,8 @@ pub enum StatementKind {
     /// An expression evaluated for its value, its effect, or both.
     Expression(Expression),
 
-    /// `yedi` with its `nabhae` chain and optional `natra`.
-    If {
-        /// The `yedi` branch first, then each `nabhae` in order.
-        branches: Vec<ConditionalBranch>,
-        fallback: Option<Block>,
-    },
+    /// `yedi (…) { … }`, with any `natra` chain hanging off [`Conditional`].
+    If(Conditional),
     While {
         condition: Box<Expression>,
         body: Block,
@@ -107,10 +103,24 @@ pub struct FunctionDefinition {
     pub body: Block,
 }
 
+/// `yedi (condition) { then } [natra …]`.
+///
+/// The chain is recursive rather than a flat list of branches: a `natra yedi`
+/// arm is one of these again in the `otherwise` slot. That is what removes the
+/// need for a separate `nabhae` keyword, and it leaves no empty-chain state to
+/// guard against.
 #[derive(Clone, Debug)]
-pub struct ConditionalBranch {
+pub struct Conditional {
     pub condition: Expression,
-    pub consequence: Block,
+    pub then: Block,
+    pub otherwise: Option<Box<Else>>,
+}
+
+/// What may follow `natra`: the final block, or another conditional.
+#[derive(Clone, Debug)]
+pub enum Else {
+    Block(Block),
+    If(Conditional),
 }
 
 /// The left side of an assignment. Restricting this to the one form that can
@@ -240,21 +250,9 @@ fn write_statement(
 
         // A block-bodied statement ends at its `}`; no `;` follows it, and
         // `write_statements` supplies the newline.
-        StatementKind::If { branches, fallback } => {
-            for (position, branch) in branches.iter().enumerate() {
-                let keyword = if position == 0 { "yedi" } else { " nabhae" };
-                write!(formatter, "{keyword} (")?;
-                write_expression(formatter, &branch.condition, depth)?;
-                formatter.write_str(") ")?;
-                write_block(formatter, &branch.consequence, depth)?;
-            }
-            match fallback {
-                Some(block) => {
-                    formatter.write_str(" natra ")?;
-                    write_block(formatter, block, depth)
-                }
-                None => Ok(()),
-            }
+        StatementKind::If(conditional) => {
+            formatter.write_str("yedi ")?;
+            write_conditional(formatter, conditional, depth)
         }
         StatementKind::While { condition, body } => {
             formatter.write_str("jabasamma (")?;
@@ -279,6 +277,32 @@ fn write_statement(
             write_expression(formatter, update, depth)?;
             formatter.write_str(") ")?;
             write_block(formatter, body, depth)
+        }
+    }
+}
+
+/// The `(condition) { … } [natra …]` that follows a `yedi`. Recursive, so a
+/// `natra yedi` arm prints by the very same path as the `yedi` that opened the
+/// chain.
+fn write_conditional(
+    formatter: &mut fmt::Formatter<'_>,
+    conditional: &Conditional,
+    depth: usize,
+) -> fmt::Result {
+    formatter.write_str("(")?;
+    write_expression(formatter, &conditional.condition, depth)?;
+    formatter.write_str(") ")?;
+    write_block(formatter, &conditional.then, depth)?;
+
+    match conditional.otherwise.as_deref() {
+        None => Ok(()),
+        Some(Else::Block(block)) => {
+            formatter.write_str(" natra ")?;
+            write_block(formatter, block, depth)
+        }
+        Some(Else::If(nested)) => {
+            formatter.write_str(" natra yedi ")?;
+            write_conditional(formatter, nested, depth)
         }
     }
 }

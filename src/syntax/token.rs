@@ -18,7 +18,6 @@ pub enum Token {
     Function, // dhanda
     Return,   // de
     If,       // yedi
-    ElseIf,   // nabhae
     Else,     // natra
     True,     // ho
     False,    // haina
@@ -65,7 +64,6 @@ pub fn keyword_or_identifier(word: &str) -> Token {
         "dhanda" => Token::Function,
         "de" => Token::Return,
         "yedi" => Token::If,
-        "nabhae" => Token::ElseIf,
         "natra" => Token::Else,
         "ho" => Token::True,
         "haina" => Token::False,
@@ -110,7 +108,6 @@ impl fmt::Display for Token {
             Token::Function => "dhanda",
             Token::Return => "de",
             Token::If => "yedi",
-            Token::ElseIf => "nabhae",
             Token::Else => "natra",
             Token::True => "ho",
             Token::False => "haina",

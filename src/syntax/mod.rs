@@ -11,7 +11,7 @@ mod parser;
 mod token;
 
 pub use ast::{
-    AssignmentTarget, BinaryOperator, Block, ConditionalBranch, Expression, ExpressionKind,
+    AssignmentTarget, BinaryOperator, Block, Conditional, Else, Expression, ExpressionKind,
     FunctionDefinition, Identifier, Program, Statement, StatementKind, UnaryOperator,
 };
 
@@ -106,9 +106,40 @@ mod tests {
     #[test]
     fn parses_a_conditional_chain_without_a_fallback() {
         assert_eq!(
-            reprint("yedi (a) { 1; } nabhae (b) { 2; }"),
-            "yedi (a) {\n    1;\n} nabhae (b) {\n    2;\n}"
+            reprint("yedi (a) { 1; } natra yedi (b) { 2; }"),
+            "yedi (a) {\n    1;\n} natra yedi (b) {\n    2;\n}"
         );
+    }
+
+    #[test]
+    fn parses_a_conditional_chain_with_a_fallback() {
+        assert_eq!(
+            reprint("yedi (a) { 1; } natra yedi (b) { 2; } natra { 3; }"),
+            "yedi (a) {\n    1;\n} natra yedi (b) {\n    2;\n} natra {\n    3;\n}"
+        );
+    }
+
+    /// `natra yedi` is not a keyword but a nested conditional, so the chain is
+    /// one node per arm rather than a flat list.
+    #[test]
+    fn a_natra_yedi_arm_nests_rather_than_flattening() {
+        let program =
+            parse("yedi (a) { 1; } natra yedi (b) { 2; } natra { 3; }").expect("should parse");
+
+        let StatementKind::If(outer) = &program.statements[0].kind else {
+            panic!("expected an if statement");
+        };
+        let Some(Else::If(middle)) = outer.otherwise.as_deref() else {
+            panic!("expected `natra yedi` to nest a conditional");
+        };
+        assert!(matches!(middle.otherwise.as_deref(), Some(Else::Block(..))));
+    }
+
+    /// `natra` takes a conditional or a block and nothing else — mulang requires
+    /// braces on every control-flow body, and this is no exception.
+    #[test]
+    fn rejects_a_bare_statement_after_natra() {
+        assert!(first_error("yedi (a) { 1; } natra bol(2);").starts_with("expected `{`"));
     }
 
     #[test]
@@ -136,10 +167,7 @@ mod tests {
         let program = parse("yedi (a) { 1; } (2);").expect("should parse");
 
         assert_eq!(program.statements.len(), 2);
-        assert!(matches!(
-            program.statements[0].kind,
-            StatementKind::If { .. }
-        ));
+        assert!(matches!(program.statements[0].kind, StatementKind::If(..)));
         assert!(matches!(
             program.statements[1].kind,
             StatementKind::Expression(..)

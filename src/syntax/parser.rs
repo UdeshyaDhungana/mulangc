@@ -134,40 +134,42 @@ impl Parser<'_> {
 
     fn parse_if(&mut self) -> Result<Statement, Diagnostic> {
         let start = self.expect(Token::If)?;
-        let mut branches = vec![self.parse_conditional_branch()?];
+        let conditional = self.parse_conditional()?;
 
-        while self.is_at(&Token::ElseIf) {
-            self.advance();
-            branches.push(self.parse_conditional_branch()?);
-        }
+        Ok(Statement {
+            span: start.joined_with(conditional_end_span(&conditional)),
+            kind: StatementKind::If(conditional),
+        })
+    }
 
-        let fallback = if self.is_at(&Token::Else) {
+    /// The `(condition) { … } [natra …]` that follows a `yedi`.
+    ///
+    /// `natra` is decided by one token of lookahead: a `yedi` after it means
+    /// another conditional, and this method recurses; anything else must be the
+    /// closing block. That lookahead is the whole of what used to be a separate
+    /// `nabhae` keyword.
+    fn parse_conditional(&mut self) -> Result<Conditional, Diagnostic> {
+        self.expect(Token::LeftParenthesis)?;
+        let condition = self.parse_expression(Precedence::Lowest)?;
+        self.expect(Token::RightParenthesis)?;
+        let then = self.parse_block()?;
+
+        let otherwise = if self.is_at(&Token::Else) {
             self.advance();
-            Some(self.parse_block()?)
+            Some(Box::new(if self.is_at(&Token::If) {
+                self.advance();
+                Else::If(self.parse_conditional()?)
+            } else {
+                Else::Block(self.parse_block()?)
+            }))
         } else {
             None
         };
 
-        let end = fallback
-            .as_ref()
-            .map_or_else(|| last_branch_span(&branches), |block| block.span);
-
-        Ok(Statement {
-            kind: StatementKind::If { branches, fallback },
-            span: start.joined_with(end),
-        })
-    }
-
-    /// The `(condition) { … }` shared by `yedi` and `nabhae`.
-    fn parse_conditional_branch(&mut self) -> Result<ConditionalBranch, Diagnostic> {
-        self.expect(Token::LeftParenthesis)?;
-        let condition = self.parse_expression(Precedence::Lowest)?;
-        self.expect(Token::RightParenthesis)?;
-        let consequence = self.parse_block()?;
-
-        Ok(ConditionalBranch {
+        Ok(Conditional {
             condition,
-            consequence,
+            then,
+            otherwise,
         })
     }
 
@@ -509,12 +511,13 @@ fn target_span(target: &AssignmentTarget) -> Span {
     }
 }
 
-fn last_branch_span(branches: &[ConditionalBranch]) -> Span {
-    branches
-        .last()
-        .expect("an if statement always has at least the yedi branch")
-        .consequence
-        .span
+/// The span of the last block in a chain, wherever the chain ends.
+fn conditional_end_span(conditional: &Conditional) -> Span {
+    match conditional.otherwise.as_deref() {
+        None => conditional.then.span,
+        Some(Else::Block(block)) => block.span,
+        Some(Else::If(nested)) => conditional_end_span(nested),
+    }
 }
 
 fn precedence_of(token: &Token) -> Precedence {
