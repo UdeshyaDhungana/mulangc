@@ -286,14 +286,6 @@ impl Parser<'_> {
                 self.advance();
                 ExpressionKind::Integer(value)
             }
-            Token::Float(value) => {
-                self.advance();
-                ExpressionKind::Float(value)
-            }
-            Token::Text(value) => {
-                self.advance();
-                ExpressionKind::Text(value)
-            }
             Token::True | Token::False => {
                 let is_true = self.is_at(&Token::True);
                 self.advance();

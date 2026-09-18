@@ -99,7 +99,7 @@ mod tests {
     fn rejects_array_and_hash_map_syntax() {
         assert_eq!(first_error("[1, 2];"), "unrecognised character `[`");
         assert_eq!(first_error("a[0];"), "unrecognised character `[`");
-        assert_eq!(first_error("{\"a\": 1};"), "unrecognised character `:`");
+        assert_eq!(first_error("{a: 1};"), "unrecognised character `:`");
     }
 
     /// A conditional is a statement, so it ends at its `}` with no `;`.

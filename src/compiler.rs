@@ -464,7 +464,7 @@ impl Compiler {
                 }
                 _ => todo!("calling the result of an expression"),
             },
-            _ => todo!("Other types of expressions not implemented;"),
+            ExpressionKind::Function(..) => todo!("function literals not implemented"),
         }
     }
 

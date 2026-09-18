@@ -75,7 +75,6 @@ impl<'source> Lexer<'source> {
                     start,
                 ),
 
-                '"' => self.scan_string(start),
                 digit if digit.is_ascii_digit() => self.scan_number(start),
                 first if is_name_start(first) => self.scan_name(start),
 
@@ -91,7 +90,7 @@ impl<'source> Lexer<'source> {
     ///
     /// Comments never become tokens, so the parser has no idea they exist. A
     /// line comment cannot be unterminated — end of input ends it just as a
-    /// newline does — so unlike a string there is nothing here to diagnose.
+    /// newline does — so there is nothing here to diagnose.
     fn skip_ignored_text(&mut self) {
         loop {
             match self.current() {
@@ -109,63 +108,31 @@ impl<'source> Lexer<'source> {
         }
     }
 
-    fn scan_string(&mut self, start: usize) {
-        let content_start = self.offset;
-        loop {
-            match self.advance() {
-                Some('"') => break,
-                Some(_) => continue,
-                None => {
-                    self.emit(Diagnostic::error(
-                        Span::new(start, start + 1),
-                        "unterminated string literal",
-                    ));
-                    return;
-                }
-            }
-        }
-
-        let content = self.source[content_start..self.offset - 1].to_owned();
-        self.push(Token::Text(content), start);
-    }
-
-    /// Reads an integer, or a decimal number when a `.` follows the digits.
+    /// Reads an integer.
+    ///
+    /// A trailing `.` and the digits after it are consumed even though mulang
+    /// has no decimals, so `1.5` is reported once as the decimal it was meant
+    /// to be, rather than splitting into `1`, an unrecognised `.`, and `5`.
     fn scan_number(&mut self, start: usize) {
         self.advance_while(|character| character.is_ascii_digit());
 
-        let has_fractional_part = self.current() == Some('.');
-        if has_fractional_part {
+        if self.current() == Some('.') {
             self.advance();
-            let fraction_start = self.offset;
             self.advance_while(|character| character.is_ascii_digit());
-            if self.offset == fraction_start {
-                self.emit(Diagnostic::error(
-                    Span::new(start, self.offset),
-                    "decimal point must be followed by at least one digit",
-                ));
-                return;
-            }
+            self.emit(Diagnostic::error(
+                Span::new(start, self.offset),
+                "mulang has no decimal numbers",
+            ));
+            return;
         }
 
         let literal = &self.source[start..self.offset];
-        let span = Span::new(start, self.offset);
-
-        if has_fractional_part {
-            match literal.parse::<f64>() {
-                Ok(value) => self.push(Token::Float(value), start),
-                Err(_) => self.emit(Diagnostic::error(
-                    span,
-                    format!("`{literal}` is not a valid decimal number"),
-                )),
-            }
-        } else {
-            match literal.parse::<i64>() {
-                Ok(value) => self.push(Token::Integer(value), start),
-                Err(_) => self.emit(Diagnostic::error(
-                    span,
-                    format!("integer `{literal}` does not fit in 64 bits"),
-                )),
-            }
+        match literal.parse::<i64>() {
+            Ok(value) => self.push(Token::Integer(value), start),
+            Err(_) => self.emit(Diagnostic::error(
+                Span::new(start, self.offset),
+                format!("integer `{literal}` does not fit in 64 bits"),
+            )),
         }
     }
 
@@ -326,17 +293,15 @@ mod tests {
     }
 
     #[test]
-    fn reports_an_unterminated_string() {
-        let diagnostics = tokenize("\"never closed").expect_err("should fail");
-        assert_eq!(diagnostics[0].message, "unterminated string literal");
+    fn rejects_string_literals() {
+        let diagnostics = tokenize("\"hello\"").expect_err("should fail");
+        assert_eq!(diagnostics[0].message, "unrecognised character `\"`");
     }
 
     #[test]
-    fn separates_integers_from_decimals() {
-        assert_eq!(
-            tokens_of("42 69.69"),
-            vec![Token::Integer(42), Token::Float(69.69), Token::EndOfInput]
-        );
+    fn rejects_decimal_numbers() {
+        let diagnostics = tokenize("42 69.69").expect_err("should fail");
+        assert_eq!(diagnostics[0].message, "mulang has no decimal numbers");
     }
 
     #[test]

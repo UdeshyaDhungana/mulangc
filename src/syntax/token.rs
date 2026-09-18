@@ -13,8 +13,6 @@ use crate::diagnostics::Span;
 pub enum Token {
     Identifier(String),
     Integer(i64),
-    Float(f64),
-    Text(String),
 
     Declare,  // thoos
     Function, // dhanda
@@ -85,8 +83,6 @@ impl Token {
         match self {
             Token::Identifier(_) => "an identifier".to_owned(),
             Token::Integer(_) => "an integer".to_owned(),
-            Token::Float(_) => "a decimal number".to_owned(),
-            Token::Text(_) => "a string".to_owned(),
             Token::EndOfInput => "end of input".to_owned(),
             spelled => format!("`{spelled}`"),
         }
@@ -98,8 +94,6 @@ impl Token {
         match self {
             Token::Identifier(name) => format!("`{name}`"),
             Token::Integer(value) => format!("`{value}`"),
-            Token::Float(value) => format!("`{value}`"),
-            Token::Text(value) => format!("the string \"{value}\""),
             other => other.describe(),
         }
     }
@@ -111,8 +105,6 @@ impl fmt::Display for Token {
         let spelling = match self {
             Token::Identifier(name) => return formatter.write_str(name),
             Token::Integer(value) => return write!(formatter, "{value}"),
-            Token::Float(value) => return write!(formatter, "{value}"),
-            Token::Text(value) => return write!(formatter, "\"{value}\""),
 
             Token::Declare => "thoos",
             Token::Function => "dhanda",
