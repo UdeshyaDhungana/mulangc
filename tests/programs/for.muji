@@ -1,5 +1,5 @@
-$ ghuma_muji accumulating 0 + 1 + 2 + 3 + 4, with the loop variable
-  declared in the header. $
+// ghuma_muji accumulating 0 + 1 + 2 + 3 + 4, with the loop variable
+// declared in the header.
 
 thoos_muji t = 0;
 

@@ -1,5 +1,5 @@
-$ Every arm of a yedi_muji / nabhae_muji / nabhae_chikne chain, plus a
-  bare yedi_muji with no alternative. $
+// Every arm of a yedi_muji / nabhae_muji / nabhae_chikne chain, plus a
+// bare yedi_muji with no alternative.
 
 thoos_muji positive = 5;
 thoos_muji zero = 0;

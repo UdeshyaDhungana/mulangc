@@ -1,5 +1,5 @@
-$ Declaration, reading an enclosing scope's variables from an inner block,
-  and assignment. $
+// Declaration, reading an enclosing scope's variables from an inner block,
+// and assignment.
 
 thoos_muji a = 10;
 thoos_muji b = 32;

@@ -1,4 +1,4 @@
-$ Binary arithmetic, precedence, grouping, and unary minus. $
+// Binary arithmetic, precedence, grouping, and unary minus.
 
 bhan_muji(2 + 3 * 4);
 bhan_muji((2 + 3) * 4);

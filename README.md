@@ -42,7 +42,7 @@ Functions are values: pass them, return them, call them where they stand.
 thoos_muji adder = kaam_gar_muji(x) {
     patha_muji kaam_gar_muji(y) { patha_muji x + y; };
 };
-adder(2)(3);    $ 5 $
+adder(2)(3);    // 5
 ```
 
 A function yields its `patha_muji` value, or its last statement's value if it
@@ -86,8 +86,10 @@ The `ghuma_muji` initialiser may declare (`thoos_muji i = 0`) or assign
 ### Comments
 
 ```muji
-$ opens and closes with a dollar sign $
+// runs from the slashes to the end of the line
 ```
+
+There is no block comment form.
 
 ### Builtins
 

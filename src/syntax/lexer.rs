@@ -87,30 +87,22 @@ impl<'source> Lexer<'source> {
         }
     }
 
-    /// Consumes whitespace and `$ … $` comments until real content is next.
+    /// Consumes whitespace and `// …` comments until real content is next.
+    ///
+    /// Comments never become tokens, so the parser has no idea they exist. A
+    /// line comment cannot be unterminated — end of input ends it just as a
+    /// newline does — so unlike a string there is nothing here to diagnose.
     fn skip_ignored_text(&mut self) {
         loop {
             match self.current() {
                 Some(character) if character.is_whitespace() => {
                     self.advance();
                 }
-                Some('$') => {
-                    let start = self.offset;
-                    self.advance();
-                    let is_terminated = loop {
-                        match self.advance() {
-                            Some('$') => break true,
-                            Some(_) => continue,
-                            None => break false,
-                        }
-                    };
-                    if !is_terminated {
-                        self.emit(
-                            Diagnostic::error(Span::new(start, start + 1), "unterminated comment")
-                                .with_help("comments open and close with `$`"),
-                        );
-                        return;
-                    }
+                // Two characters of lookahead, because a lone `/` is division.
+                Some('/') if self.source[self.offset..].starts_with("//") => {
+                    // Stop *before* the newline and let the whitespace arm take
+                    // it on the next turn of the loop.
+                    self.advance_while(|character| character != '\n');
                 }
                 _ => return,
             }
@@ -284,15 +276,53 @@ mod tests {
     #[test]
     fn skips_comments_entirely() {
         assert_eq!(
-            tokens_of("$ a comment ; with tokens in it $ 1"),
+            tokens_of("// a comment ; with tokens in it\n1"),
             vec![Token::Integer(1), Token::EndOfInput]
         );
     }
 
     #[test]
-    fn reports_an_unterminated_comment() {
-        let diagnostics = tokenize("$ never closed").expect_err("should fail");
-        assert_eq!(diagnostics[0].message, "unterminated comment");
+    fn a_comment_ends_at_the_newline() {
+        assert_eq!(
+            tokens_of("1 // two\n3"),
+            vec![Token::Integer(1), Token::Integer(3), Token::EndOfInput]
+        );
+    }
+
+    #[test]
+    fn a_comment_may_run_to_the_end_of_input() {
+        assert_eq!(
+            tokens_of("1 // never followed by a newline"),
+            vec![Token::Integer(1), Token::EndOfInput]
+        );
+    }
+
+    #[test]
+    fn a_lone_slash_is_still_division() {
+        assert_eq!(
+            tokens_of("6 / 2"),
+            vec![
+                Token::Integer(6),
+                Token::Slash,
+                Token::Integer(2),
+                Token::EndOfInput
+            ]
+        );
+    }
+
+    #[test]
+    fn two_separated_slashes_are_two_divisions() {
+        assert_eq!(
+            tokens_of("8 / 2 / 2"),
+            vec![
+                Token::Integer(8),
+                Token::Slash,
+                Token::Integer(2),
+                Token::Slash,
+                Token::Integer(2),
+                Token::EndOfInput
+            ]
+        );
     }
 
     #[test]

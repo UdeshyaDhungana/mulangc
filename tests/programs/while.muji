@@ -1,4 +1,4 @@
-$ jaba_samma_muji accumulating 0 + 1 + 2 + 3 + 4. $
+// jaba_samma_muji accumulating 0 + 1 + 2 + 3 + 4.
 
 thoos_muji i = 0;
 thoos_muji sum = 0;
