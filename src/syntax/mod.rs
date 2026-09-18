@@ -50,7 +50,7 @@ mod tests {
 
     #[test]
     fn parses_a_declaration() {
-        assert_eq!(reprint("thoos_muji x = 43;"), "thoos_muji x = 43;");
+        assert_eq!(reprint("thoos x = 43;"), "thoos x = 43;");
     }
 
     #[test]
@@ -106,28 +106,25 @@ mod tests {
     #[test]
     fn parses_a_conditional_chain_without_a_fallback() {
         assert_eq!(
-            reprint("yedi_muji (a) { 1; } nabhae_muji (b) { 2; }"),
-            "yedi_muji (a) {\n    1;\n} nabhae_muji (b) {\n    2;\n}"
+            reprint("yedi (a) { 1; } nabhae (b) { 2; }"),
+            "yedi (a) {\n    1;\n} nabhae (b) {\n    2;\n}"
         );
     }
 
     #[test]
     fn parses_a_function_with_no_parameters() {
-        assert_eq!(
-            reprint("kaam_gar_muji() { patha_muji 1; };"),
-            "kaam_gar_muji() {\n    patha_muji 1;\n};"
-        );
+        assert_eq!(reprint("dhanda() { de 1; };"), "dhanda() {\n    de 1;\n};");
     }
 
     #[test]
     fn parses_both_for_loop_initialiser_forms() {
         assert_eq!(
-            reprint("ghuma_muji (thoos_muji i = 0; i < 3; i = i + 1) { i; }"),
-            "ghuma_muji (thoos_muji i = 0; (i < 3); (i = (i + 1))) {\n    i;\n}"
+            reprint("fanfani (thoos i = 0; i < 3; i = i + 1) { i; }"),
+            "fanfani (thoos i = 0; (i < 3); (i = (i + 1))) {\n    i;\n}"
         );
         assert_eq!(
-            reprint("ghuma_muji (i = 0; i < 3; i = i + 1) { i; }"),
-            "ghuma_muji ((i = 0); (i < 3); (i = (i + 1))) {\n    i;\n}"
+            reprint("fanfani (i = 0; i < 3; i = i + 1) { i; }"),
+            "fanfani ((i = 0); (i < 3); (i = (i + 1))) {\n    i;\n}"
         );
     }
 
@@ -136,7 +133,7 @@ mod tests {
     /// separate expression statement `(2);`, not a call with an `if` callee.
     #[test]
     fn a_conditional_is_never_the_callee_of_a_call() {
-        let program = parse("yedi_muji (a) { 1; } (2);").expect("should parse");
+        let program = parse("yedi (a) { 1; } (2);").expect("should parse");
 
         assert_eq!(program.statements.len(), 2);
         assert!(matches!(
@@ -154,11 +151,11 @@ mod tests {
     #[test]
     fn rejects_a_loop_where_an_expression_is_expected() {
         assert_eq!(
-            first_error("thoos_muji x = jaba_samma_muji (a) {};"),
-            "expected an expression, found `jaba_samma_muji`"
+            first_error("thoos x = jabasamma (a) {};"),
+            "expected an expression, found `jabasamma`"
         );
         assert_eq!(
-            first_error("jaba_samma_muji (a) { 1; } + 1;"),
+            first_error("jabasamma (a) { 1; } + 1;"),
             "expected an expression, found `+`"
         );
     }
@@ -170,18 +167,18 @@ mod tests {
 
     #[test]
     fn requires_a_semicolon_after_a_declaration() {
-        assert!(first_error("thoos_muji x = 1").starts_with("expected `;`"));
+        assert!(first_error("thoos x = 1").starts_with("expected `;`"));
     }
 
     #[test]
     fn reports_every_broken_statement_in_one_pass() {
-        let diagnostics = parse("thoos_muji = 1; thoos_muji = 2;").expect_err("should not parse");
+        let diagnostics = parse("thoos = 1; thoos = 2;").expect_err("should not parse");
         assert_eq!(diagnostics.len(), 2);
     }
 
     #[test]
     fn flags_a_truncated_block_as_running_out_of_input() {
-        let diagnostics = parse("yedi_muji (a) {").expect_err("should not parse");
+        let diagnostics = parse("yedi (a) {").expect_err("should not parse");
         assert!(diagnostics[0].is_caused_by_end_of_input);
     }
 }

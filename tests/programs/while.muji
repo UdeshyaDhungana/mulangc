@@ -1,11 +1,11 @@
-// jaba_samma_muji accumulating 0 + 1 + 2 + 3 + 4.
+// jabasamma accumulating 0 + 1 + 2 + 3 + 4.
 
-thoos_muji i = 0;
-thoos_muji sum = 0;
+thoos i = 0;
+thoos sum = 0;
 
-jaba_samma_muji (i < 5) {
+jabasamma (i < 5) {
     sum = sum + i;
     i = i + 1;
 }
 
-bhan_muji(sum);
+bol(sum);

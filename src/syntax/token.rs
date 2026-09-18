@@ -16,16 +16,16 @@ pub enum Token {
     Float(f64),
     Text(String),
 
-    Declare,  // thoos_muji
-    Function, // kaam_gar_muji
-    Return,   // patha_muji
-    If,       // yedi_muji
-    ElseIf,   // nabhae_muji
-    Else,     // nabhae_chikne
-    True,     // sacho_muji
-    False,    // jhut_muji
-    While,    // jaba_samma_muji
-    For,      // ghuma_muji
+    Declare,  // thoos
+    Function, // dhanda
+    Return,   // de
+    If,       // yedi
+    ElseIf,   // nabhae
+    Else,     // natra
+    True,     // ho
+    False,    // haina
+    While,    // jabasamma
+    For,      // fanfani
 
     Plus,
     Minus,
@@ -63,16 +63,16 @@ pub struct SpannedToken {
 /// token; anything else is a name the program chose.
 pub fn keyword_or_identifier(word: &str) -> Token {
     match word {
-        "thoos_muji" => Token::Declare,
-        "kaam_gar_muji" => Token::Function,
-        "patha_muji" => Token::Return,
-        "yedi_muji" => Token::If,
-        "nabhae_muji" => Token::ElseIf,
-        "nabhae_chikne" => Token::Else,
-        "sacho_muji" => Token::True,
-        "jhut_muji" => Token::False,
-        "jaba_samma_muji" => Token::While,
-        "ghuma_muji" => Token::For,
+        "thoos" => Token::Declare,
+        "dhanda" => Token::Function,
+        "de" => Token::Return,
+        "yedi" => Token::If,
+        "nabhae" => Token::ElseIf,
+        "natra" => Token::Else,
+        "ho" => Token::True,
+        "haina" => Token::False,
+        "jabasamma" => Token::While,
+        "fanfani" => Token::For,
         _ => Token::Identifier(word.to_owned()),
     }
 }
@@ -114,16 +114,16 @@ impl fmt::Display for Token {
             Token::Float(value) => return write!(formatter, "{value}"),
             Token::Text(value) => return write!(formatter, "\"{value}\""),
 
-            Token::Declare => "thoos_muji",
-            Token::Function => "kaam_gar_muji",
-            Token::Return => "patha_muji",
-            Token::If => "yedi_muji",
-            Token::ElseIf => "nabhae_muji",
-            Token::Else => "nabhae_chikne",
-            Token::True => "sacho_muji",
-            Token::False => "jhut_muji",
-            Token::While => "jaba_samma_muji",
-            Token::For => "ghuma_muji",
+            Token::Declare => "thoos",
+            Token::Function => "dhanda",
+            Token::Return => "de",
+            Token::If => "yedi",
+            Token::ElseIf => "nabhae",
+            Token::Else => "natra",
+            Token::True => "ho",
+            Token::False => "haina",
+            Token::While => "jabasamma",
+            Token::For => "fanfani",
 
             Token::Plus => "+",
             Token::Minus => "-",

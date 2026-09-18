@@ -185,11 +185,11 @@ impl Compiler {
             }
             StatementKind::If { branches, fallback } => {
                 let if_stmt_number = self.counter.next();
-                let if_stmt_end_label = format!("yedi_muji_{}_end", if_stmt_number);
+                let if_stmt_end_label = format!("yedi_{}_end", if_stmt_number);
 
                 for (idx, branch) in branches.iter().enumerate() {
-                    let current_label = format!("yedi_muji_{}_branch_{}", if_stmt_number, idx);
-                    let next_label = format!("yedi_muji_{}_branch_{}", if_stmt_number, idx + 1);
+                    let current_label = format!("yedi_{}_branch_{}", if_stmt_number, idx);
+                    let next_label = format!("yedi_{}_branch_{}", if_stmt_number, idx + 1);
 
                     self.emit_outer_level_line(&format!("{current_label}:"));
                     self.emit_expression_evaluation_assembly_and_push_evaluated(&branch.condition)?;
@@ -205,7 +205,7 @@ impl Compiler {
                 }
 
                 self.emit_outer_level_line(&format!(
-                    "yedi_muji_{}_branch_{}:",
+                    "yedi_{}_branch_{}:",
                     if_stmt_number,
                     branches.len()
                 ));
@@ -430,7 +430,7 @@ impl Compiler {
                     #[derive(Debug, PartialEq, EnumString)]
                     #[strum(serialize_all = "snake_case")]
                     enum BuiltinFunctions {
-                        BhanMuji,
+                        Bol,
                         Abs,
                     }
 
@@ -440,7 +440,7 @@ impl Compiler {
                     };
 
                     match builtin {
-                        BuiltinFunctions::BhanMuji => {
+                        BuiltinFunctions::Bol => {
                             // This only supports one integer argument as of now
                             if arguments.len() != 1 {
                                 return Err(Diagnostic::error(
@@ -453,9 +453,9 @@ impl Compiler {
                                 &arguments[0],
                             )?;
                             self.emit_line("ldr x0, [sp], #16");
-                            self.emit_line("bl _bhan_muji");
-                            // `bhan_muji` prints and yields nothing, and the
-                            // call has clobbered `x0` anyway.
+                            self.emit_line("bl _bol");
+                            // `bol` prints and yields nothing, and the call
+                            // has clobbered `x0` anyway.
                             self.emit_push_unit();
                             Ok(())
                         }
@@ -478,10 +478,10 @@ impl Compiler {
     fn emit_builtin_functions(&mut self) {
         self.emit_outer_level_line("// BUILTINS");
 
-        // bhan_muji()
+        // bol()
         // Only supports one integer argument for now
         self.emit_outer_level_line(".p2align 2");
-        self.emit_outer_level_line("_bhan_muji:");
+        self.emit_outer_level_line("_bol:");
 
         // Could use a frame here, but not necessary for a builtin
         self.push_frame(16);

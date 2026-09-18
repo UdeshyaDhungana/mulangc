@@ -32,19 +32,19 @@ pub struct Statement {
 
 #[derive(Clone, Debug)]
 pub enum StatementKind {
-    /// `thoos_muji name = value;`
+    /// `thoos name = value;`
     Declaration {
         identifier: Identifier,
         value: Expression,
     },
-    /// `patha_muji value;`
+    /// `de value;`
     Return(Expression),
     /// An expression evaluated for its value, its effect, or both.
     Expression(Expression),
 
-    /// `yedi_muji` with its `nabhae_muji` chain and optional `nabhae_chikne`.
+    /// `yedi` with its `nabhae` chain and optional `natra`.
     If {
-        /// The `yedi_muji` branch first, then each `nabhae_muji` in order.
+        /// The `yedi` branch first, then each `nabhae` in order.
         branches: Vec<ConditionalBranch>,
         fallback: Option<Block>,
     },
@@ -226,12 +226,12 @@ fn write_statement(
             identifier: name,
             value,
         } => {
-            write!(formatter, "thoos_muji {name} = ")?;
+            write!(formatter, "thoos {name} = ")?;
             write_expression(formatter, value, depth)?;
             formatter.write_str(";")
         }
         StatementKind::Return(value) => {
-            formatter.write_str("patha_muji ")?;
+            formatter.write_str("de ")?;
             write_expression(formatter, value, depth)?;
             formatter.write_str(";")
         }
@@ -244,11 +244,7 @@ fn write_statement(
         // `write_statements` supplies the newline.
         StatementKind::If { branches, fallback } => {
             for (position, branch) in branches.iter().enumerate() {
-                let keyword = if position == 0 {
-                    "yedi_muji"
-                } else {
-                    " nabhae_muji"
-                };
+                let keyword = if position == 0 { "yedi" } else { " nabhae" };
                 write!(formatter, "{keyword} (")?;
                 write_expression(formatter, &branch.condition, depth)?;
                 formatter.write_str(") ")?;
@@ -256,14 +252,14 @@ fn write_statement(
             }
             match fallback {
                 Some(block) => {
-                    formatter.write_str(" nabhae_chikne ")?;
+                    formatter.write_str(" natra ")?;
                     write_block(formatter, block, depth)
                 }
                 None => Ok(()),
             }
         }
         StatementKind::While { condition, body } => {
-            formatter.write_str("jaba_samma_muji (")?;
+            formatter.write_str("jabasamma (")?;
             write_expression(formatter, condition, depth)?;
             formatter.write_str(") ")?;
             write_block(formatter, body, depth)
@@ -274,7 +270,7 @@ fn write_statement(
             update,
             body,
         } => {
-            formatter.write_str("ghuma_muji (")?;
+            formatter.write_str("fanfani (")?;
             match initialiser {
                 Some(statement) => write_statement(formatter, statement, depth)?,
                 None => formatter.write_str(";")?,
@@ -306,8 +302,8 @@ fn write_expression(
         ExpressionKind::Integer(value) => write!(formatter, "{value}"),
         ExpressionKind::Float(value) => write!(formatter, "{value}"),
         ExpressionKind::Text(value) => write!(formatter, "\"{value}\""),
-        ExpressionKind::Boolean(true) => formatter.write_str("sacho_muji"),
-        ExpressionKind::Boolean(false) => formatter.write_str("jhut_muji"),
+        ExpressionKind::Boolean(true) => formatter.write_str("ho"),
+        ExpressionKind::Boolean(false) => formatter.write_str("haina"),
 
         ExpressionKind::UnaryOperation { operator, operand } => {
             write!(formatter, "({operator}")?;
@@ -341,7 +337,7 @@ fn write_expression(
             formatter.write_str(")")
         }
         ExpressionKind::Function(definition) => {
-            formatter.write_str("kaam_gar_muji(")?;
+            formatter.write_str("dhanda(")?;
             write_separated(
                 formatter,
                 &definition.parameters,

@@ -1,17 +1,17 @@
 // Declaration, reading an enclosing scope's variables from an inner block,
 // and assignment.
 
-thoos_muji a = 10;
-thoos_muji b = 32;
-bhan_muji(a + b);
+thoos a = 10;
+thoos b = 32;
+bol(a + b);
 
-yedi_muji (sacho_muji) {
-    thoos_muji c = 5;
-    bhan_muji(a + b + c);
+yedi (ho) {
+    thoos c = 5;
+    bol(a + b + c);
 }
 
 a = a * 2;
-bhan_muji(a);
+bol(a);
 
 b = a + b;
-bhan_muji(b);
+bol(b);

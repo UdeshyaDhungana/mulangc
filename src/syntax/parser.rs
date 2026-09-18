@@ -158,7 +158,7 @@ impl Parser<'_> {
         })
     }
 
-    /// The `(condition) { … }` shared by `yedi_muji` and `nabhae_muji`.
+    /// The `(condition) { … }` shared by `yedi` and `nabhae`.
     fn parse_conditional_branch(&mut self) -> Result<ConditionalBranch, Diagnostic> {
         self.expect(Token::LeftParenthesis)?;
         let condition = self.parse_expression(Precedence::Lowest)?;
@@ -477,7 +477,7 @@ impl Parser<'_> {
         Ok(Identifier { name, span })
     }
 
-    /// `thoos_muji` and `patha_muji` both require a closing `;`, unlike a
+    /// `thoos` and `de` both require a closing `;`, unlike a
     /// free-standing expression statement where it is optional.
     fn expect_statement_terminator(&mut self) -> Result<Span, Diagnostic> {
         self.expect(Token::Semicolon)
@@ -520,7 +520,7 @@ fn target_span(target: &AssignmentTarget) -> Span {
 fn last_branch_span(branches: &[ConditionalBranch]) -> Span {
     branches
         .last()
-        .expect("an if statement always has at least the yedi_muji branch")
+        .expect("an if statement always has at least the yedi branch")
         .consequence
         .span
 }

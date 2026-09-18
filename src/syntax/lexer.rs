@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn scans_a_declaration() {
         assert_eq!(
-            tokens_of("thoos_muji x = 43;"),
+            tokens_of("thoos x = 43;"),
             vec![
                 Token::Declare,
                 Token::Identifier("x".to_owned()),
@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn spans_point_at_the_token_they_came_from() {
-        let tokens = tokenize("  thoos_muji").expect("should lex");
-        assert_eq!(tokens[0].span, Span::new(2, 12));
+        let tokens = tokenize("  thoos").expect("should lex");
+        assert_eq!(tokens[0].span, Span::new(2, 7));
     }
 }

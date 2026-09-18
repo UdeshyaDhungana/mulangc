@@ -6,34 +6,34 @@
 // positive offsets from the innermost x29, reading `a` from inside the block
 // picked up the saved x29/x30 pair instead — printing 4294967297.
 
-thoos_muji a = 7;
+thoos a = 7;
 
 a + 1;
 a;
 a == 7;
 
-yedi_muji (sacho_muji) {
-    bhan_muji(a);
+yedi (ho) {
+    bol(a);
 }
 
 // Same leak, once per iteration rather than once.
-thoos_muji i = 0;
-jaba_samma_muji (i < 3) {
+thoos i = 0;
+jabasamma (i < 3) {
     i + 100;
     i = i + 1;
 }
-bhan_muji(i);
+bol(i);
 
 // An assignment is an expression, so its value can be used.
-thoos_muji b = 0;
-thoos_muji c = 0;
+thoos b = 0;
+thoos c = 0;
 b = c = 9;
-bhan_muji(b + c);
+bol(b + c);
 
 // And a loop update that leaks would drift the stack every iteration.
-thoos_muji t = 0;
-ghuma_muji (thoos_muji j = 0; j < 4; j = j + 1) {
-    bhan_muji(j);
+thoos t = 0;
+fanfani (thoos j = 0; j < 4; j = j + 1) {
+    bol(j);
     t = t + j;
 }
-bhan_muji(t);
+bol(t);
