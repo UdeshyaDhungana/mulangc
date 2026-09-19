@@ -84,8 +84,10 @@ mod tests {
     }
 
     #[test]
-    fn calls_chain() {
-        assert_eq!(reprint("f(1)(2)(3);"), "f(1)(2)(3);");
+    fn calls_take_a_name_not_an_expression() {
+        assert_eq!(reprint("f(1, 2);"), "f(1, 2);");
+        assert_eq!(first_error("f(1)(2);"), "cannot call this expression");
+        assert_eq!(first_error("(a + b)(1);"), "cannot call this expression");
     }
 
     #[test]
@@ -144,7 +146,31 @@ mod tests {
 
     #[test]
     fn parses_a_function_with_no_parameters() {
-        assert_eq!(reprint("dhanda() { de 1; };"), "dhanda() {\n    de 1;\n};");
+        assert_eq!(reprint("dhanda one() { de 1; }"), "dhanda one() {\n    de 1;\n}");
+    }
+
+    #[test]
+    fn parses_a_function_with_parameters() {
+        assert_eq!(
+            reprint("dhanda add(a, b) { de a + b; }"),
+            "dhanda add(a, b) {\n    de (a + b);\n}"
+        );
+    }
+
+    #[test]
+    fn a_function_definition_needs_a_name() {
+        assert_eq!(
+            first_error("dhanda() { de 1; }"),
+            "expected an identifier, found `(`"
+        );
+    }
+
+    #[test]
+    fn a_function_is_no_longer_an_expression() {
+        assert_eq!(
+            first_error("thoos f = dhanda(x) { de x; };"),
+            "expected an expression, found `dhanda`"
+        );
     }
 
     #[test]

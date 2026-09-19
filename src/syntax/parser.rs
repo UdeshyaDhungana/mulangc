@@ -12,7 +12,6 @@
 //! keeps going, so one run reports every broken statement in the file.
 
 use std::mem::discriminant;
-use std::rc::Rc;
 
 use crate::diagnostics::{Diagnostic, Span};
 use crate::syntax::ast::*;
@@ -84,7 +83,12 @@ impl Parser<'_> {
             }
             if matches!(
                 self.current_token(),
-                Token::Declare | Token::Return | Token::If | Token::While | Token::For
+                Token::Declare
+                    | Token::Return
+                    | Token::Function
+                    | Token::If
+                    | Token::While
+                    | Token::For
             ) {
                 return;
             }
@@ -98,6 +102,7 @@ impl Parser<'_> {
         match self.current_token() {
             Token::Declare => self.parse_declaration(),
             Token::Return => self.parse_return(),
+            Token::Function => self.parse_function(),
             Token::If => self.parse_if(),
             Token::While => self.parse_while(),
             Token::For => self.parse_for(),
@@ -296,7 +301,6 @@ impl Parser<'_> {
 
             Token::Minus | Token::Bang => return self.parse_unary(),
             Token::LeftParenthesis => return self.parse_grouping(),
-            Token::Function => return self.parse_function(),
 
             _ => return Err(self.error_at_current("expected an expression")),
         };
@@ -373,6 +377,7 @@ impl Parser<'_> {
     }
 
     fn parse_call(&mut self, callee: Expression) -> Result<Expression, Diagnostic> {
+        let callee = callee_of(callee)?;
         self.expect(Token::LeftParenthesis)?;
         let arguments =
             self.parse_comma_separated(&Token::RightParenthesis, Self::parse_expression_at_lowest)?;
@@ -380,24 +385,31 @@ impl Parser<'_> {
 
         Ok(Expression {
             span: callee.span.joined_with(end),
-            kind: ExpressionKind::Call {
-                callee: Box::new(callee),
-                arguments,
-            },
+            kind: ExpressionKind::Call { callee, arguments },
         })
     }
 
-    fn parse_function(&mut self) -> Result<Expression, Diagnostic> {
+    /// `dhanda name(a, b) { … }`.
+    ///
+    /// The name is mandatory. An anonymous definition made sense while a
+    /// function was an expression that something could bind; as a statement it
+    /// would define nothing.
+    fn parse_function(&mut self) -> Result<Statement, Diagnostic> {
         let start = self.expect(Token::Function)?;
+        let name = self.expect_identifier()?;
         self.expect(Token::LeftParenthesis)?;
         let parameters =
             self.parse_comma_separated(&Token::RightParenthesis, Self::expect_identifier)?;
         self.expect(Token::RightParenthesis)?;
         let body = self.parse_block()?;
 
-        Ok(Expression {
+        Ok(Statement {
             span: start.joined_with(body.span),
-            kind: ExpressionKind::Function(Rc::new(FunctionDefinition { parameters, body })),
+            kind: StatementKind::Function(FunctionDefinition {
+                name,
+                parameters,
+                body,
+            }),
         })
     }
 
@@ -494,6 +506,18 @@ impl Parser<'_> {
 }
 
 /// Rejects assignment to anything that does not name a place a value can live.
+/// The name being called. Rejects anything else at parse time, so `f(1)(2)` is
+/// a syntax error rather than something the back end has to have an opinion
+/// about.
+fn callee_of(expression: Expression) -> Result<Identifier, Diagnostic> {
+    let span = expression.span;
+    match expression.kind {
+        ExpressionKind::Identifier(name) => Ok(Identifier { name, span }),
+        _ => Err(Diagnostic::error(span, "cannot call this expression")
+            .with_help("only a named function can be called")),
+    }
+}
+
 fn assignment_target_of(expression: Expression) -> Result<AssignmentTarget, Diagnostic> {
     let span = expression.span;
     match expression.kind {

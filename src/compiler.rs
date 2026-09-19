@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::format};
+use std::collections::HashMap;
 
 use strum_macros::EnumString;
 
@@ -46,10 +46,28 @@ struct Frame {
     offset_map: HashMap<String, i64>,
 }
 
+impl Frame {
+    fn get_next_offset(&self) -> i64 {
+        -i64::try_from(SLOT_SIZE * (1 + self.offset_map.len()))
+            .expect("Failed converting frame offset")
+    }
+}
+
+struct Section {
+    lines: Vec<String>,
+}
+
+impl Default for Section {
+    fn default() -> Self {
+        Self { lines: Vec::new() }
+    }
+}
+
 pub struct Compiler {
     frames: Vec<Frame>,
     output_file: String,
-    lines: Vec<String>,
+    sections_stack: Vec<Section>,
+    registered_sections: Vec<Section>,
     counter: Counter,
 }
 
@@ -58,9 +76,23 @@ impl Compiler {
         Self {
             output_file: output_file.to_string(),
             frames: Vec::new(),
-            lines: Vec::new(),
+            sections_stack: vec![Default::default()],
+            registered_sections: Vec::new(),
             counter: Counter::default(),
         }
+    }
+
+    fn begin_new_section(&mut self) {
+        self.sections_stack.push(Default::default());
+    }
+
+    fn get_current_section(&mut self) -> &mut Section {
+        self.sections_stack.last_mut().unwrap()
+    }
+
+    fn end_current_section_and_register_it(&mut self) {
+        self.registered_sections
+            .push(self.sections_stack.pop().unwrap())
     }
 
     fn push_frame(&mut self, frame_size: usize) {
@@ -77,6 +109,10 @@ impl Compiler {
         // then move `stack pointer` to `x29` to set up the frame pointer
         // frame pointer is fixed because we'll need to calculate offsets
         // for locals
+        self.emit_comment(&format!(
+            "frame {}: enter, {frame_size} bytes of locals",
+            self.frames.len() - 1
+        ));
         self.emit_line("stp x29, x30, [sp, #-16]!");
         self.emit_line("mov x29, sp");
         if frame_size > 0 {
@@ -90,24 +126,29 @@ impl Compiler {
 
         // Frame release assembly
         self.emit_newline();
+        self.emit_comment(&format!("frame {}: leave", self.frames.len()));
         self.emit_line("mov sp, x29");
         self.emit_line("ldp x29, x30, [sp], #16");
     }
 
-    fn get_topmost_frame_offset_map(&mut self) -> &mut HashMap<String, i64> {
-        &mut self.frames.last_mut().unwrap().offset_map
-    }
-
     fn emit_line(&mut self, line: &str) {
-        self.lines.push(format!("    {line}\n"));
+        self.get_current_section()
+            .lines
+            .push(format!("    {line}\n"));
     }
 
     fn emit_newline(&mut self) {
-        self.lines.push("\n".to_string());
+        self.get_current_section().lines.push("\n".to_string());
     }
 
     fn emit_outer_level_line(&mut self, line: &str) {
-        self.lines.push(format!("{line}\n"));
+        self.get_current_section().lines.push(format!("{line}\n"));
+    }
+
+    /// A note in the generated assembly saying which part of the compiler
+    /// produced the lines that follow. Purely for reading the `.s` by eye.
+    fn emit_comment(&mut self, text: &str) {
+        self.emit_line(&format!("// {text}"));
     }
 
     fn emit_comparison(&mut self, condition: &str) {
@@ -129,7 +170,12 @@ impl Compiler {
         self.emit_line("add sp, sp, #16");
     }
 
+    fn get_topmost_frame(&mut self) -> &mut Frame {
+        self.frames.last_mut().unwrap()
+    }
+
     pub fn compile(&mut self, program: &Program) -> Result<(), Diagnostic> {
+        self.begin_new_section();
         self.emit_preamble();
         // Very much later in our lifetime, we'd witness linking, and include and everythang
         // For now, we just emit the builtins here
@@ -145,6 +191,7 @@ impl Compiler {
         self.emit_line("mov x0, #0");
         self.pop_frame();
         self.emit_line("ret");
+        self.end_current_section_and_register_it();
         self.write_assembly_file()
     }
 
@@ -152,7 +199,8 @@ impl Compiler {
         match &statement.kind {
             StatementKind::Declaration { identifier, value } => {
                 if self
-                    .get_topmost_frame_offset_map()
+                    .get_topmost_frame()
+                    .offset_map
                     .contains_key(&identifier.name)
                 {
                     return Err(Diagnostic::error(
@@ -161,26 +209,82 @@ impl Compiler {
                     ));
                 }
 
-                // TODO: Find a way to decrement this efficiently
-                let next_offset: i64 =
-                    -i64::try_from(SLOT_SIZE * (1 + self.get_topmost_frame_offset_map().len()))
-                        .expect("Failed converting frame offset");
+                let next_offset = self.get_topmost_frame().get_next_offset();
 
-                self.get_topmost_frame_offset_map()
+                self.get_topmost_frame()
+                    .offset_map
                     .insert(identifier.name.clone(), next_offset);
 
+                self.emit_comment(&format!(
+                    "thoos {} -> [x29, #{next_offset}]",
+                    identifier.name
+                ));
                 self.emit_expression_evaluation_assembly_and_push_evaluated(value)?;
                 self.emit_line("ldr x0, [sp], #16");
                 self.emit_line(&format!("str x0, [x29, #{next_offset}]"));
                 self.emit_newline();
                 Ok(())
             }
-            StatementKind::Return(..) => {
-                todo!("Not implemented return yet")
+            StatementKind::Return(return_expression) => {
+                self.emit_comment("de: value into x0, then leave");
+                self.emit_expression_evaluation_assembly_and_push_evaluated(return_expression)?;
+                self.emit_line("ldr x0, [sp], #16");
+                self.pop_frame();
+                self.emit_line("ret");
+                Ok(())
             }
             StatementKind::Expression(expression) => {
+                self.emit_comment("expression statement: value is discarded");
                 self.emit_expression_evaluation_assembly_and_push_evaluated(expression)?;
                 self.pop_void();
+                Ok(())
+            }
+            StatementKind::Function(definition) => {
+                self.begin_new_section();
+                self.emit_outer_level_line(&format!(
+                    "// dhanda {}({})",
+                    definition.name,
+                    definition
+                        .parameters
+                        .iter()
+                        .map(|parameter| parameter.name.as_str())
+                        .collect::<Vec<&str>>()
+                        .join(", ")
+                ));
+                self.emit_outer_level_line(".p2align 2");
+                self.emit_outer_level_line(&format!("{}:", definition.name));
+                // Function take up a frame size that is equal to
+                // - frame size taken up by all the statements in its body AND
+                // - number of arguments the function accepts
+                let frame_size_for_function_body_statements =
+                    frame_size_for_statements(&definition.body.statements);
+                let frame_size_for_parameters = definition.parameters.len() * 16;
+                // TODO: When we support more than 8 arguments, we'll run out of registers and
+                // will have to use the stack, in that case, we need to find a way to preserve the locations
+                // of the stack-living arguments so we can push them again later in the function body
+                self.push_frame(
+                    frame_size_for_function_body_statements + frame_size_for_parameters,
+                );
+                for (idx, parameter) in definition.parameters.iter().enumerate() {
+                    let next_offset = self.get_topmost_frame().get_next_offset();
+                    self.get_topmost_frame()
+                        .offset_map
+                        .insert(parameter.name.clone(), next_offset);
+                    // Get where that variable lives
+                    // Later on we'll have to make this dynamic to fetch these from stack
+                    let register_name = format!("x{}", idx);
+                    self.emit_comment(&format!(
+                        "param {}: spill {register_name} -> [x29, #{next_offset}]",
+                        parameter.name
+                    ));
+                    self.emit_line(&format!("str {register_name}, [x29, #{next_offset}]"));
+                }
+                self.emit_newline();
+                self.emit_comment(&format!("dhanda {}: body", definition.name));
+                for statement in definition.body.statements.iter() {
+                    self.emit_statement_assembly(statement)?;
+                }
+                self.end_current_section_and_register_it();
                 Ok(())
             }
             StatementKind::If(conditional) => self.emit_conditional_assembly(conditional),
@@ -190,9 +294,11 @@ impl Compiler {
                 let while_end_label = &format!("while_{}_end", while_stmt_number);
 
                 self.emit_outer_level_line(&format!("{while_start_label}:"));
+                self.emit_comment(&format!("jabasamma {while_stmt_number}: condition"));
                 self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
                 self.emit_line("ldr x0, [sp], #16");
                 self.emit_line(&format!("cbz x0, {while_end_label}"));
+                self.emit_comment(&format!("jabasamma {while_stmt_number}: body"));
                 self.emit_block_assembly(body)?;
                 self.emit_line(&format!("b {while_start_label}"));
                 self.emit_outer_level_line(&format!("{while_end_label}:"));
@@ -213,17 +319,21 @@ impl Compiler {
 
                 self.push_frame(frame_size_for_statements(&initialiser_statements));
 
+                let for_stmt_counter = self.counter.next();
                 if let Some(initialiser) = initialiser {
+                    self.emit_comment(&format!("fanfani {for_stmt_counter}: initialiser"));
                     self.emit_statement_assembly(initialiser)?;
                 }
-                let for_stmt_counter = self.counter.next();
                 let while_condition_label = format!("for_{}_start", for_stmt_counter);
                 let while_end_label = format!("for_{}_end", for_stmt_counter);
                 self.emit_outer_level_line(&format!("{while_condition_label}:"));
+                self.emit_comment(&format!("fanfani {for_stmt_counter}: condition"));
                 self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
                 self.emit_line("ldr x0, [sp], #16");
                 self.emit_line(&format!("cbz x0, {while_end_label}"));
+                self.emit_comment(&format!("fanfani {for_stmt_counter}: body"));
                 self.emit_block_assembly(body)?;
+                self.emit_comment(&format!("fanfani {for_stmt_counter}: update"));
                 self.emit_expression_evaluation_assembly_and_push_evaluated(update)?;
                 // The update runs for its effect, once per iteration. Leaving
                 // its value behind walks the stack downwards for as long as the
@@ -242,18 +352,26 @@ impl Compiler {
         let else_label = format!("if_{conditional_number}_else");
         let end_label = format!("if_{conditional_number}_end");
 
+        self.emit_comment(&format!("yedi {conditional_number}: condition"));
         self.emit_expression_evaluation_assembly_and_push_evaluated(&conditional.condition)?;
         self.emit_line("ldr x0, [sp], #16");
         self.emit_line(&format!("cbz x0, {else_label}"));
 
+        self.emit_comment(&format!("yedi {conditional_number}: then"));
         self.emit_block_assembly(&conditional.then)?;
         self.emit_line(&format!("b {end_label}"));
 
         self.emit_outer_level_line(&format!("{else_label}:"));
         match conditional.otherwise.as_deref() {
-            Some(Else::Block(block)) => self.emit_block_assembly(block)?,
-            Some(Else::If(conditional)) => self.emit_conditional_assembly(conditional)?,
-            None => {}
+            Some(Else::Block(block)) => {
+                self.emit_comment(&format!("yedi {conditional_number}: natra"));
+                self.emit_block_assembly(block)?
+            }
+            Some(Else::If(conditional)) => {
+                self.emit_comment(&format!("yedi {conditional_number}: natra yedi"));
+                self.emit_conditional_assembly(conditional)?
+            }
+            None => self.emit_comment(&format!("yedi {conditional_number}: no natra")),
         }
 
         self.emit_outer_level_line(&format!("{end_label}:"));
@@ -306,11 +424,13 @@ impl Compiler {
 
                 let offset = (TryInto::<i64>::try_into(sum_of_frame_sizes).unwrap()) + local_offset;
 
+                self.emit_comment(&format!("load `{identifier}`"));
                 self.emit_line(&format!("ldr x0, [x29, #{offset}]"));
                 self.emit_line("str x0, [sp, #-16]!");
                 Ok(())
             }
             ExpressionKind::Integer(integer) => {
+                self.emit_comment(&format!("literal {integer}"));
                 self.emit_line(&format!("mov x0, #{integer}"));
                 self.emit_line("str x0, [sp, #-16]!");
                 Ok(())
@@ -318,6 +438,7 @@ impl Compiler {
             ExpressionKind::Boolean(bool) => {
                 // We internally represent booleans as 1 (true) or 0 (false).
                 let bool_int = if *bool { 1 } else { 0 };
+                self.emit_comment(&format!("literal {}", if *bool { "ho" } else { "haina" }));
                 self.emit_line(&format!("mov x0, #{bool_int}"));
                 self.emit_line("str x0, [sp, #-16]!");
                 Ok(())
@@ -326,6 +447,7 @@ impl Compiler {
                 self.emit_expression_evaluation_assembly_and_push_evaluated(operand)?;
                 match operator {
                     UnaryOperator::Negate => {
+                        self.emit_comment("unary -");
                         self.emit_line("ldr x0, [sp], #16");
                         self.emit_line("neg x0, x0");
                         self.emit_line("str x0, [sp, #-16]!");
@@ -344,6 +466,7 @@ impl Compiler {
                 self.emit_expression_evaluation_assembly_and_push_evaluated(left)?;
                 self.emit_expression_evaluation_assembly_and_push_evaluated(right)?;
 
+                self.emit_comment(&format!("binary `{operator}`"));
                 self.emit_line("ldr x0, [sp], #16");
                 self.emit_line("ldr x1, [sp], #16");
 
@@ -404,6 +527,7 @@ impl Compiler {
                         let offset =
                             (TryInto::<i64>::try_into(sum_of_frame_sizes).unwrap()) + local_offset;
 
+                        self.emit_comment(&format!("assign to `{}`", identifier.name));
                         self.emit_line("ldr x0, [sp], #16");
                         self.emit_line(&format!("str x0, [x29, #{offset}]"));
                         // An assignment is an expression whose value is the
@@ -414,46 +538,64 @@ impl Compiler {
                     }
                 }
             }
-            ExpressionKind::Call { callee, arguments } => match &callee.kind {
-                ExpressionKind::Identifier(id) => {
-                    #[derive(Debug, PartialEq, EnumString)]
-                    #[strum(serialize_all = "snake_case")]
-                    enum BuiltinFunctions {
-                        Bol,
-                        Abs,
-                    }
-
-                    // Match against the builtin functions first
-                    let Ok(builtin) = id.parse::<BuiltinFunctions>() else {
-                        todo!("user-defined functions not implemented");
-                    };
-
-                    match builtin {
-                        BuiltinFunctions::Bol => {
-                            // This only supports one integer argument as of now
-                            if arguments.len() != 1 {
-                                return Err(Diagnostic::error(
-                                    expression.span,
-                                    format!("`{id}` supports only one integer argument"),
-                                ));
-                            }
-
-                            self.emit_expression_evaluation_assembly_and_push_evaluated(
-                                &arguments[0],
-                            )?;
-                            self.emit_line("ldr x0, [sp], #16");
-                            self.emit_line("bl _bol");
-                            // `bol` prints and yields nothing, and the call
-                            // has clobbered `x0` anyway.
-                            self.push_void();
-                            Ok(())
-                        }
-                        BuiltinFunctions::Abs => todo!("abs not implemented"),
-                    }
+            ExpressionKind::Call { callee, arguments } => {
+                // TODO: MOVE BUILTIN FUNCTIONS AS A SEPARATE LIBRARY
+                // FUNCTION RATHER THAN A BUILTIN FUNCTION
+                // THERE MUST BE NO BUILTIN FUNCTIONS
+                #[derive(Debug, PartialEq, EnumString)]
+                #[strum(serialize_all = "snake_case")]
+                enum BuiltinFunctions {
+                    Bol,
+                    Abs,
                 }
-                _ => todo!("calling the result of an expression"),
-            },
-            ExpressionKind::Function(..) => todo!("function literals not implemented"),
+
+                // Match against the builtin functions first
+                let Ok(builtin) = callee.name.parse::<BuiltinFunctions>() else {
+                    if arguments.len() > 8 {
+                        todo!("Not supported more than 8 arguments");
+                    }
+                    self.emit_comment(&format!(
+                        "call `{}`: evaluate {} argument(s)",
+                        callee.name,
+                        arguments.len()
+                    ));
+                    for argument in arguments.iter() {
+                        self.emit_expression_evaluation_assembly_and_push_evaluated(argument)?;
+                    }
+                    self.emit_comment(&format!("call `{}`: arguments into x0..", callee.name));
+                    for idx in (0..arguments.len()).rev() {
+                        let register = format!("x{idx}");
+                        self.emit_line(&format!("ldr {register}, [sp], #16"));
+                    }
+                    self.emit_line(&format!("bl {}", callee.name));
+                    // Push the value onto the stack
+                    self.emit_line("str x0, [sp, #-16]!");
+                    return Ok(());
+                };
+
+                match builtin {
+                    BuiltinFunctions::Bol => {
+                        // This only supports one integer argument as of now
+                        if arguments.len() != 1 {
+                            return Err(Diagnostic::error(
+                                expression.span,
+                                "`bol` supports only one integer argument",
+                            ));
+                        }
+
+                        self.emit_comment("builtin `bol`: argument");
+                        self.emit_expression_evaluation_assembly_and_push_evaluated(&arguments[0])?;
+                        self.emit_comment("builtin `bol`: call");
+                        self.emit_line("ldr x0, [sp], #16");
+                        self.emit_line("bl _bol");
+                        // `bol` prints and yields nothing, and the call
+                        // has clobbered `x0` anyway.
+                        self.push_void();
+                        Ok(())
+                    }
+                    BuiltinFunctions::Abs => todo!("abs not implemented"),
+                }
+            }
         }
     }
 
@@ -500,7 +642,16 @@ impl Compiler {
     fn write_assembly_file(&self) -> Result<(), Diagnostic> {
         let path = format!("{}.s", self.output_file);
 
-        std::fs::write(&path, self.lines.concat()).map_err(|error| {
+        let contents = self
+            .registered_sections
+            .iter()
+            // sections that end early go later
+            .rev()
+            .map(|section| section.lines.concat())
+            .collect::<Vec<String>>()
+            .join("\n\n");
+
+        std::fs::write(&path, contents).map_err(|error| {
             Diagnostic::error(Span::new(0, 0), format!("cannot write {path}: {error}"))
         })
     }

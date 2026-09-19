@@ -9,7 +9,6 @@
 //! assertion target.
 
 use std::fmt;
-use std::rc::Rc;
 
 use crate::diagnostics::Span;
 
@@ -41,6 +40,13 @@ pub enum StatementKind {
     Return(Expression),
     /// An expression evaluated for its value, its effect, or both.
     Expression(Expression),
+
+    /// `dhanda name(…) { … }`.
+    ///
+    /// A definition is a statement rather than an expression because the
+    /// statement form is the only thing that names it, and a name is the only
+    /// way to reach a function without closures.
+    Function(FunctionDefinition),
 
     /// `yedi (…) { … }`, with any `natra` chain hanging off [`Conditional`].
     If(Conditional),
@@ -88,17 +94,25 @@ pub enum ExpressionKind {
         target: AssignmentTarget,
         value: Box<Expression>,
     },
+    /// `name(arguments)`.
+    ///
+    /// The callee is a name, not an arbitrary expression. Without closures or
+    /// function values there is nothing else a call could be applied to, and
+    /// restricting it here means the back end never has to ask what `f(1)(2)`
+    /// would mean — same reasoning as [`AssignmentTarget`].
     Call {
-        callee: Box<Expression>,
+        callee: Identifier,
         arguments: Vec<Expression>,
     },
-    /// Shared behind an `Rc` so that building a closure at run time costs a
-    /// refcount bump instead of a deep copy of the body.
-    Function(Rc<FunctionDefinition>),
 }
 
+/// `dhanda name(parameters) { body }`.
+///
+/// Owned outright rather than shared behind an `Rc`: that indirection existed
+/// so building a closure could be a refcount bump, and mulang has no closures.
 #[derive(Clone, Debug)]
 pub struct FunctionDefinition {
+    pub name: Identifier,
     pub parameters: Vec<Identifier>,
     pub body: Block,
 }
@@ -250,6 +264,17 @@ fn write_statement(
 
         // A block-bodied statement ends at its `}`; no `;` follows it, and
         // `write_statements` supplies the newline.
+        StatementKind::Function(definition) => {
+            write!(formatter, "dhanda {}(", definition.name)?;
+            write_separated(
+                formatter,
+                &definition.parameters,
+                depth,
+                |formatter, parameter, _| write!(formatter, "{parameter}"),
+            )?;
+            formatter.write_str(") ")?;
+            write_block(formatter, &definition.body, depth)
+        }
         StatementKind::If(conditional) => {
             formatter.write_str("yedi ")?;
             write_conditional(formatter, conditional, depth)
@@ -351,21 +376,10 @@ fn write_expression(
             formatter.write_str(")")
         }
         ExpressionKind::Call { callee, arguments } => {
-            write_expression(formatter, callee, depth)?;
+            write!(formatter, "{callee}")?;
             formatter.write_str("(")?;
             write_separated(formatter, arguments, depth, write_expression)?;
             formatter.write_str(")")
-        }
-        ExpressionKind::Function(definition) => {
-            formatter.write_str("dhanda(")?;
-            write_separated(
-                formatter,
-                &definition.parameters,
-                depth,
-                |formatter, parameter, _| write!(formatter, "{parameter}"),
-            )?;
-            formatter.write_str(") ")?;
-            write_block(formatter, &definition.body, depth)
         }
     }
 }

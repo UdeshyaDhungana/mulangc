@@ -1,41 +1,6 @@
 
-// Every arm of a yedi / nabhae / natra chain, plus a
-// bare yedi with no alternative.
-
-thoos positive = 5;
-thoos zero = 0;
-thoos negative = -5;
-
-yedi (positive > 0) {
-    bol(1);
-} natra yedi (positive < 0) {
-    bol(2);
-} natra {
-    bol(3);
+dhanda sqr(x) {
+    de x * x;
 }
 
-yedi (negative > 0) {
-    bol(1);
-} natra yedi (negative < 0) {
-    bol(2);
-} natra {
-    bol(3);
-}
-
-yedi (zero > 0) {
-    bol(1);
-} natra yedi (zero < 0) {
-    bol(2);
-} natra {
-    bol(3);
-}
-
-yedi (positive == 5) {
-    bol(4);
-}
-
-yedi(positive == -1) {
-    bol(1);
-} natra {
-    bol(5);
-}
+bol(sqr(7));
