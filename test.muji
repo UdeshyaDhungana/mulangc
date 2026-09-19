@@ -1,6 +1,6 @@
 
-dhanda sqr(x) {
-    de x * x;
+dhanda sub(a, b) {
+    de a - b;
 }
 
-bol(sqr(7));
+bol(sub(2, 3));

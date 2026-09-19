@@ -156,17 +156,29 @@ impl Compiler {
         self.emit_line(&format!("cset x0, {condition}"));
     }
 
+    /// Push `x0` onto the stack.
+    /// A value occupies 16 bytes rather than 8 because `sp` must stay 16-byte
+    /// aligned at every instruction, so the upper half of each slot is padding.
+    fn push_from_x0(&mut self) {
+        self.emit_line("str x0, [sp, #-16]!");
+    }
+
+    /// Pop the top of the stack into `x0`.
+    fn pop_to_x0(&mut self) {
+        self.emit_line("ldr x0, [sp], #16");
+    }
+
     /// Push the value of an expression that does not have one. Every
     /// expression must leave exactly one value on the stack, so the ones that
     /// produce nothing useful still push a placeholder for their consumer to discard.
-    fn push_void(&mut self) {
+    fn push_zero_byte(&mut self) {
         self.emit_line("mov x0, #0");
-        self.emit_line("str x0, [sp, #-16]!");
+        self.push_from_x0();
     }
 
     /// Throw away the value on top of the stack, for an expression evaluated
     /// only for its side effect.
-    fn pop_void(&mut self) {
+    fn pop_and_ignore_byte(&mut self) {
         self.emit_line("add sp, sp, #16");
     }
 
@@ -220,7 +232,7 @@ impl Compiler {
                     identifier.name
                 ));
                 self.emit_expression_evaluation_assembly_and_push_evaluated(value)?;
-                self.emit_line("ldr x0, [sp], #16");
+                self.pop_to_x0();
                 self.emit_line(&format!("str x0, [x29, #{next_offset}]"));
                 self.emit_newline();
                 Ok(())
@@ -228,7 +240,7 @@ impl Compiler {
             StatementKind::Return(return_expression) => {
                 self.emit_comment("de: value into x0, then leave");
                 self.emit_expression_evaluation_assembly_and_push_evaluated(return_expression)?;
-                self.emit_line("ldr x0, [sp], #16");
+                self.pop_to_x0();
                 self.pop_frame();
                 self.emit_line("ret");
                 Ok(())
@@ -236,7 +248,7 @@ impl Compiler {
             StatementKind::Expression(expression) => {
                 self.emit_comment("expression statement: value is discarded");
                 self.emit_expression_evaluation_assembly_and_push_evaluated(expression)?;
-                self.pop_void();
+                self.pop_and_ignore_byte();
                 Ok(())
             }
             StatementKind::Function(definition) => {
@@ -296,7 +308,7 @@ impl Compiler {
                 self.emit_outer_level_line(&format!("{while_start_label}:"));
                 self.emit_comment(&format!("jabasamma {while_stmt_number}: condition"));
                 self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
-                self.emit_line("ldr x0, [sp], #16");
+                self.pop_to_x0();
                 self.emit_line(&format!("cbz x0, {while_end_label}"));
                 self.emit_comment(&format!("jabasamma {while_stmt_number}: body"));
                 self.emit_block_assembly(body)?;
@@ -329,7 +341,7 @@ impl Compiler {
                 self.emit_outer_level_line(&format!("{while_condition_label}:"));
                 self.emit_comment(&format!("fanfani {for_stmt_counter}: condition"));
                 self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
-                self.emit_line("ldr x0, [sp], #16");
+                self.pop_to_x0();
                 self.emit_line(&format!("cbz x0, {while_end_label}"));
                 self.emit_comment(&format!("fanfani {for_stmt_counter}: body"));
                 self.emit_block_assembly(body)?;
@@ -338,7 +350,7 @@ impl Compiler {
                 // The update runs for its effect, once per iteration. Leaving
                 // its value behind walks the stack downwards for as long as the
                 // loop runs.
-                self.pop_void();
+                self.pop_and_ignore_byte();
                 self.emit_line(&format!("b {while_condition_label}"));
                 self.emit_outer_level_line(&format!("{while_end_label}:"));
                 self.pop_frame();
@@ -354,7 +366,7 @@ impl Compiler {
 
         self.emit_comment(&format!("yedi {conditional_number}: condition"));
         self.emit_expression_evaluation_assembly_and_push_evaluated(&conditional.condition)?;
-        self.emit_line("ldr x0, [sp], #16");
+        self.pop_to_x0();
         self.emit_line(&format!("cbz x0, {else_label}"));
 
         self.emit_comment(&format!("yedi {conditional_number}: then"));
@@ -426,13 +438,13 @@ impl Compiler {
 
                 self.emit_comment(&format!("load `{identifier}`"));
                 self.emit_line(&format!("ldr x0, [x29, #{offset}]"));
-                self.emit_line("str x0, [sp, #-16]!");
+                self.push_from_x0();
                 Ok(())
             }
             ExpressionKind::Integer(integer) => {
                 self.emit_comment(&format!("literal {integer}"));
                 self.emit_line(&format!("mov x0, #{integer}"));
-                self.emit_line("str x0, [sp, #-16]!");
+                self.push_from_x0();
                 Ok(())
             }
             ExpressionKind::Boolean(bool) => {
@@ -440,7 +452,7 @@ impl Compiler {
                 let bool_int = if *bool { 1 } else { 0 };
                 self.emit_comment(&format!("literal {}", if *bool { "ho" } else { "haina" }));
                 self.emit_line(&format!("mov x0, #{bool_int}"));
-                self.emit_line("str x0, [sp, #-16]!");
+                self.push_from_x0();
                 Ok(())
             }
             ExpressionKind::UnaryOperation { operator, operand } => {
@@ -448,9 +460,9 @@ impl Compiler {
                 match operator {
                     UnaryOperator::Negate => {
                         self.emit_comment("unary -");
-                        self.emit_line("ldr x0, [sp], #16");
+                        self.pop_to_x0();
                         self.emit_line("neg x0, x0");
-                        self.emit_line("str x0, [sp, #-16]!");
+                        self.push_from_x0();
                         Ok(())
                     }
                     UnaryOperator::Not => {
@@ -465,9 +477,8 @@ impl Compiler {
             } => {
                 self.emit_expression_evaluation_assembly_and_push_evaluated(left)?;
                 self.emit_expression_evaluation_assembly_and_push_evaluated(right)?;
-
                 self.emit_comment(&format!("binary `{operator}`"));
-                self.emit_line("ldr x0, [sp], #16");
+                self.pop_to_x0();
                 self.emit_line("ldr x1, [sp], #16");
 
                 // x1 holds the left operand, x0 the right.
@@ -491,7 +502,7 @@ impl Compiler {
                 }
 
                 // Push back onto the stack
-                self.emit_line("str x0, [sp, #-16]!");
+                self.push_from_x0();
                 Ok(())
             }
             ExpressionKind::Assignment { target, value } => {
@@ -528,12 +539,12 @@ impl Compiler {
                             (TryInto::<i64>::try_into(sum_of_frame_sizes).unwrap()) + local_offset;
 
                         self.emit_comment(&format!("assign to `{}`", identifier.name));
-                        self.emit_line("ldr x0, [sp], #16");
+                        self.pop_to_x0();
                         self.emit_line(&format!("str x0, [x29, #{offset}]"));
                         // An assignment is an expression whose value is the
                         // value assigned, so `x = y = 3` works and binds to the
                         // right. `x0` still holds it, so push it back.
-                        self.emit_line("str x0, [sp, #-16]!");
+                        self.push_from_x0();
                         Ok(())
                     }
                 }
@@ -569,7 +580,7 @@ impl Compiler {
                     }
                     self.emit_line(&format!("bl {}", callee.name));
                     // Push the value onto the stack
-                    self.emit_line("str x0, [sp, #-16]!");
+                    self.push_from_x0();
                     return Ok(());
                 };
 
@@ -586,11 +597,11 @@ impl Compiler {
                         self.emit_comment("builtin `bol`: argument");
                         self.emit_expression_evaluation_assembly_and_push_evaluated(&arguments[0])?;
                         self.emit_comment("builtin `bol`: call");
-                        self.emit_line("ldr x0, [sp], #16");
+                        self.pop_to_x0();
                         self.emit_line("bl _bol");
                         // `bol` prints and yields nothing, and the call
                         // has clobbered `x0` anyway.
-                        self.push_void();
+                        self.push_zero_byte();
                         Ok(())
                     }
                     BuiltinFunctions::Abs => todo!("abs not implemented"),
