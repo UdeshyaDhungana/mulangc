@@ -1,0 +1,27 @@
+// `de` from inside a loop body — the loop frame and, for fanfani, the
+// header frame both have to be unwound on the way out.
+
+dhanda first_over(limit) {
+    thoos i = 0;
+    jabasamma (i < 100) {
+        yedi (i > limit) {
+            de i;
+        }
+        i = i + 1;
+    }
+    de 0;
+}
+
+dhanda find_root(target) {
+    fanfani (thoos i = 0; i < 20; i = i + 1) {
+        yedi (i * i == target) {
+            de i;
+        }
+    }
+    de -1;
+}
+
+bol(first_over(5));
+bol(first_over(0));
+bol(find_root(49));
+bol(find_root(50));

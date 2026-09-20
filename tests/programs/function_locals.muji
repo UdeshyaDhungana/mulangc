@@ -1,0 +1,21 @@
+// Locals declared inside a function body, a local declared inside a
+// nested block, and assignment to a parameter.
+
+dhanda compute(a, b) {
+    thoos sum = a + b;
+    thoos doubled = sum * 2;
+    yedi (doubled > 10) {
+        thoos extra = 100;
+        de doubled + extra;
+    }
+    de doubled;
+}
+
+dhanda mutate(n) {
+    n = n * 3;
+    de n;
+}
+
+bol(compute(1, 2));
+bol(compute(4, 5));
+bol(mutate(5));

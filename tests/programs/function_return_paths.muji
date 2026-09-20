@@ -1,0 +1,30 @@
+// `de` reached from inside a yedi, from a natra arm, and from a block
+// nested two deep. Each one has to unwind every block frame it sits in
+// before leaving the function.
+
+dhanda sign(n) {
+    yedi (n > 0) {
+        de 1;
+    } natra yedi (n < 0) {
+        de -1;
+    } natra {
+        de 0;
+    }
+}
+
+dhanda deep(n) {
+    yedi (n > 0) {
+        yedi (n > 10) {
+            de 100;
+        }
+        de 10;
+    }
+    de 0;
+}
+
+bol(sign(7));
+bol(sign(-7));
+bol(sign(0));
+bol(deep(50));
+bol(deep(5));
+bol(deep(-5));

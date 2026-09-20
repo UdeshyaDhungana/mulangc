@@ -44,6 +44,9 @@ impl Counter {
 struct Frame {
     size: usize,
     offset_map: HashMap<String, i64>,
+    // is_functional is true if the frame belongs to a
+    // function and not a block statement
+    is_functional: bool,
 }
 
 impl Frame {
@@ -82,7 +85,7 @@ impl Compiler {
         }
     }
 
-    fn begin_new_section(&mut self) {
+    fn begin_new_assembly_section(&mut self) {
         self.sections_stack.push(Default::default());
     }
 
@@ -95,11 +98,12 @@ impl Compiler {
             .push(self.sections_stack.pop().unwrap())
     }
 
-    fn push_frame(&mut self, frame_size: usize) {
+    fn push_frame(&mut self, frame_size: usize, is_functional: bool) {
         self.frames.push({
             Frame {
                 size: frame_size,
                 offset_map: HashMap::new(),
+                is_functional: is_functional,
             }
         });
 
@@ -123,12 +127,29 @@ impl Compiler {
 
     fn pop_frame(&mut self) {
         self.frames.pop();
+        self.emit_frame_release_assembly();
+    }
 
-        // Frame release assembly
+    fn emit_frame_release_assembly(&mut self) {
         self.emit_newline();
-        self.emit_comment(&format!("frame {}: leave", self.frames.len()));
         self.emit_line("mov sp, x29");
         self.emit_line("ldp x29, x30, [sp], #16");
+    }
+
+    /// Unwind every enclosing block frame and then the function's own, so a
+    /// `de` buried in nested blocks still leaves through one epilogue.
+    fn emit_essembly_to_destroy_all_frames_upto_enclosing_function(&mut self) {
+        let frames_to_release = self
+            .frames
+            .iter()
+            .rev()
+            .position(|frame| frame.is_functional)
+            .expect("Expected an enclosing function frame")
+            + 1;
+
+        for _ in 0..frames_to_release {
+            self.emit_frame_release_assembly();
+        }
     }
 
     fn emit_line(&mut self, line: &str) {
@@ -187,7 +208,7 @@ impl Compiler {
     }
 
     pub fn compile(&mut self, program: &Program) -> Result<(), Diagnostic> {
-        self.begin_new_section();
+        self.begin_new_assembly_section();
         self.emit_preamble();
         // Very much later in our lifetime, we'd witness linking, and include and everythang
         // For now, we just emit the builtins here
@@ -195,7 +216,7 @@ impl Compiler {
 
         self.emit_outer_level_line(".p2align 2");
         self.emit_outer_level_line("_main:");
-        self.push_frame(frame_size_for_statements(&program.statements));
+        self.push_frame(frame_size_for_statements(&program.statements), true);
         for statement in &program.statements {
             self.emit_statement_assembly(statement)?;
         }
@@ -241,7 +262,10 @@ impl Compiler {
                 self.emit_comment("de: value into x0, then leave");
                 self.emit_expression_evaluation_assembly_and_push_evaluated(return_expression)?;
                 self.pop_to_x0();
-                self.pop_frame();
+                // Instead of this, what return should be responsible for
+                // Is walking down the frames stack, and pop all non functional
+                // frames
+                self.emit_essembly_to_destroy_all_frames_upto_enclosing_function();
                 self.emit_line("ret");
                 Ok(())
             }
@@ -252,7 +276,7 @@ impl Compiler {
                 Ok(())
             }
             StatementKind::Function(definition) => {
-                self.begin_new_section();
+                self.begin_new_assembly_section();
                 self.emit_outer_level_line(&format!(
                     "// dhanda {}({})",
                     definition.name,
@@ -276,6 +300,7 @@ impl Compiler {
                 // of the stack-living arguments so we can push them again later in the function body
                 self.push_frame(
                     frame_size_for_function_body_statements + frame_size_for_parameters,
+                    true,
                 );
                 for (idx, parameter) in definition.parameters.iter().enumerate() {
                     let next_offset = self.get_topmost_frame().get_next_offset();
@@ -302,8 +327,10 @@ impl Compiler {
             StatementKind::If(conditional) => self.emit_conditional_assembly(conditional),
             StatementKind::While { condition, body } => {
                 let while_stmt_number = self.counter.next();
-                let while_start_label = &format!("while_{}_start", while_stmt_number);
-                let while_end_label = &format!("while_{}_end", while_stmt_number);
+                // `L` marks a label the assembler resolves and then discards,
+                // instead of exporting it into the object file's symbol table.
+                let while_start_label = &format!("Lwhile_{}_start", while_stmt_number);
+                let while_end_label = &format!("Lwhile_{}_end", while_stmt_number);
 
                 self.emit_outer_level_line(&format!("{while_start_label}:"));
                 self.emit_comment(&format!("jabasamma {while_stmt_number}: condition"));
@@ -329,15 +356,15 @@ impl Compiler {
                     .map(|statement| (**statement).clone())
                     .collect();
 
-                self.push_frame(frame_size_for_statements(&initialiser_statements));
+                self.push_frame(frame_size_for_statements(&initialiser_statements), false);
 
                 let for_stmt_counter = self.counter.next();
                 if let Some(initialiser) = initialiser {
                     self.emit_comment(&format!("fanfani {for_stmt_counter}: initialiser"));
                     self.emit_statement_assembly(initialiser)?;
                 }
-                let while_condition_label = format!("for_{}_start", for_stmt_counter);
-                let while_end_label = format!("for_{}_end", for_stmt_counter);
+                let while_condition_label = format!("Lfor_{}_start", for_stmt_counter);
+                let while_end_label = format!("Lfor_{}_end", for_stmt_counter);
                 self.emit_outer_level_line(&format!("{while_condition_label}:"));
                 self.emit_comment(&format!("fanfani {for_stmt_counter}: condition"));
                 self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
@@ -361,8 +388,8 @@ impl Compiler {
 
     fn emit_conditional_assembly(&mut self, conditional: &Conditional) -> Result<(), Diagnostic> {
         let conditional_number = self.counter.next();
-        let else_label = format!("if_{conditional_number}_else");
-        let end_label = format!("if_{conditional_number}_end");
+        let else_label = format!("Lif_{conditional_number}_else");
+        let end_label = format!("Lif_{conditional_number}_end");
 
         self.emit_comment(&format!("yedi {conditional_number}: condition"));
         self.emit_expression_evaluation_assembly_and_push_evaluated(&conditional.condition)?;
@@ -393,7 +420,7 @@ impl Compiler {
     /// A block's statements, in a frame of their own so its locals go out of
     /// scope with it.
     fn emit_block_assembly(&mut self, block: &Block) -> Result<(), Diagnostic> {
-        self.push_frame(frame_size_for_statements(&block.statements));
+        self.push_frame(frame_size_for_statements(&block.statements), false);
         for statement in &block.statements {
             self.emit_statement_assembly(statement)?;
         }
@@ -626,7 +653,7 @@ impl Compiler {
         self.emit_outer_level_line("_bol:");
 
         // Could use a frame here, but not necessary for a builtin
-        self.push_frame(16);
+        self.push_frame(16, true);
 
         // because printf expects arguments on the stack
         self.emit_line("str x0, [sp]");

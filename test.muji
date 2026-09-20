@@ -1,6 +1,12 @@
 
-dhanda sub(a, b) {
-    de a - b;
+thoos g = 5;
+
+dhanda peek() {
+    de g;
 }
 
-bol(sub(2, 3));
+dhanda passthru() {
+    de peek();
+}
+
+bol(passthru());
