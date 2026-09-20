@@ -1,0 +1,36 @@
+// Some paths run a `de`, others fall off the end. The implicit return has
+// to be reachable from the fall-through path only, without disturbing the
+// explicit ones.
+//
+// Falling off the end yields 0, same assumption as
+// function_implicit_return_value.
+
+dhanda only_positive(n) {
+    yedi (n > 0) {
+        de n;
+    }
+}
+
+// Falls off the end of a loop rather than a conditional — the loop's own
+// frames have to be unwound on the way out too.
+dhanda first_match(limit) {
+    fanfani (thoos i = 0; i < 10; i = i + 1) {
+        yedi (i == limit) {
+            de i;
+        }
+    }
+}
+
+dhanda after_while(n) {
+    thoos i = 0;
+    jabasamma (i < n) {
+        i = i + 1;
+    }
+    bol(i);
+}
+
+bol(only_positive(5));
+bol(only_positive(-5));
+bol(first_match(3));
+bol(first_match(50));
+bol(after_while(4));

@@ -1,0 +1,25 @@
+// Functions where every path already ends in `de`. An implicit epilogue
+// appended after them is unreachable, and must not corrupt the reachable
+// paths or leave a stray frame release behind.
+
+dhanda both_arms(n) {
+    yedi (n > 0) {
+        de 1;
+    } natra {
+        de 2;
+    }
+}
+
+dhanda ends_with_de(n) {
+    bol(n);
+    de n * 2;
+}
+
+dhanda returns_immediately() {
+    de 42;
+}
+
+bol(both_arms(1));
+bol(both_arms(-1));
+bol(ends_with_de(5));
+bol(returns_immediately());

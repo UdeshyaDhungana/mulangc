@@ -54,19 +54,42 @@ fn programs_directory() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/programs")
 }
 
-/// Every `.muji` file in `tests/programs`, sorted so the failure report reads
-/// the same way twice.
+/// Every `.muji` file under `tests/programs`, at any depth, sorted so the
+/// failure report reads the same way twice. Subdirectories are how the corpus
+/// is grouped — `functions/`, `control_flow/`, and so on — and carry no meaning
+/// beyond that.
 fn collect_programs() -> Vec<PathBuf> {
-    let directory = programs_directory();
-
-    let mut programs: Vec<PathBuf> = fs::read_dir(&directory)
-        .unwrap_or_else(|error| panic!("cannot read {}: {error}", directory.display()))
-        .map(|entry| entry.expect("cannot read directory entry").path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "muji"))
-        .collect();
-
+    let mut programs = Vec::new();
+    collect_programs_under(&programs_directory(), &mut programs);
     programs.sort();
     programs
+}
+
+fn collect_programs_under(directory: &Path, programs: &mut Vec<PathBuf>) {
+    let entries = fs::read_dir(directory)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", directory.display()));
+
+    for entry in entries {
+        let path = entry.expect("cannot read directory entry").path();
+
+        if path.is_dir() {
+            collect_programs_under(&path, programs);
+        } else if path.extension().is_some_and(|extension| extension == "muji") {
+            programs.push(path);
+        }
+    }
+}
+
+/// `functions/recursion` — what a failure report calls the program, and the
+/// name of its scratch directory once the `/` is flattened.
+fn relative_name(source: &Path) -> String {
+    source
+        .strip_prefix(programs_directory())
+        .expect("program lives outside tests/programs")
+        .with_extension("")
+        .to_str()
+        .expect("program name is not valid UTF-8")
+        .to_owned()
 }
 
 /// Compile, assemble, run, compare. The `Err` is a human-readable report of
@@ -77,9 +100,12 @@ fn run_one(source: &Path) -> Result<(), String> {
         .and_then(|stem| stem.to_str())
         .expect("program name is not valid UTF-8");
 
-    let report = |stage: &str, detail: String| format!("  {name}: {stage}\n{detail}");
+    // `functions/recursion` reads better in a failure report than `recursion`,
+    // and keeps two same-named programs in different groups apart.
+    let reported_as = relative_name(source);
+    let report = |stage: &str, detail: String| format!("  {reported_as}: {stage}\n{detail}");
 
-    let scratch = prepare_scratch_directory(name, source);
+    let scratch = prepare_scratch_directory(&reported_as.replace('/', "_"), source, name);
 
     let compiled = run_in(&scratch, COMPILER, &[&format!("{name}.muji")]);
     if !compiled.status.success() {
@@ -119,16 +145,16 @@ fn run_one(source: &Path) -> Result<(), String> {
 
 /// A clean `target/muji-tests/{name}` holding just the source, so the
 /// compiler's cwd-relative output lands somewhere harmless.
-fn prepare_scratch_directory(name: &str, source: &Path) -> PathBuf {
+fn prepare_scratch_directory(directory_name: &str, source: &Path, stem: &str) -> PathBuf {
     let scratch = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("target/muji-tests")
-        .join(name);
+        .join(directory_name);
 
     if scratch.exists() {
         fs::remove_dir_all(&scratch).expect("cannot clear scratch directory");
     }
     fs::create_dir_all(&scratch).expect("cannot create scratch directory");
-    fs::copy(source, scratch.join(format!("{name}.muji"))).expect("cannot copy program");
+    fs::copy(source, scratch.join(format!("{stem}.muji"))).expect("cannot copy program");
 
     scratch
 }

@@ -1,0 +1,18 @@
+// What a call evaluates to when the function never runs a `de`.
+//
+// This assumes the implicit return value is 0, matching `push_zero_byte`
+// and `_main`'s own `mov x0, #0`. If you pick something else, this .out
+// is the file to change.
+
+dhanda nothing() {
+}
+
+dhanda prints_only(a) {
+    bol(a);
+}
+
+bol(nothing());
+bol(prints_only(3));
+
+thoos t = nothing();
+bol(t + 1);

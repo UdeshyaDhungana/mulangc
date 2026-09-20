@@ -1,12 +1,6 @@
 
-thoos g = 5;
-
-dhanda peek() {
-    de g;
+dhanda keinagar() {
+    bol(34);
 }
 
-dhanda passthru() {
-    de peek();
-}
-
-bol(passthru());
+keinagar();

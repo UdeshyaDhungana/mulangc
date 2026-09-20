@@ -318,8 +318,21 @@ impl Compiler {
                 }
                 self.emit_newline();
                 self.emit_comment(&format!("dhanda {}: body", definition.name));
+                let mut has_return = false;
                 for statement in definition.body.statements.iter() {
                     self.emit_statement_assembly(statement)?;
+                    match statement.kind {
+                        StatementKind::Return(..) => {
+                            has_return = true;
+                        }
+                        _ => {}
+                    }
+                }
+                // Return void if a function doesn't contain a return statement
+                if !has_return {
+                    self.emit_line("mov x0, #0");
+                    self.emit_essembly_to_destroy_all_frames_upto_enclosing_function();
+                    self.emit_line("ret");
                 }
                 self.end_current_section_and_register_it();
                 Ok(())
