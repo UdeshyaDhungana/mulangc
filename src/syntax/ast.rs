@@ -164,6 +164,8 @@ pub enum BinaryOperator {
     LessOrEqual,
     Greater,
     GreaterOrEqual,
+    BooleanAnd,
+    BooleanOr,
 }
 
 impl fmt::Display for UnaryOperator {
@@ -189,6 +191,8 @@ impl fmt::Display for BinaryOperator {
             BinaryOperator::LessOrEqual => "<=",
             BinaryOperator::Greater => ">",
             BinaryOperator::GreaterOrEqual => ">=",
+            BinaryOperator::BooleanAnd => "ra",
+            BinaryOperator::BooleanOr => "wa",
         })
     }
 }

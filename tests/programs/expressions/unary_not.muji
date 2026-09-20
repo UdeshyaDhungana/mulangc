@@ -1,0 +1,37 @@
+// `!` takes a boolean and gives back the other one.
+
+dhanda no() {
+    de haina;
+}
+
+bol(!ho);
+bol(!haina);
+bol(!!ho);
+bol(!!haina);
+
+// Binds tighter than `ra` and `wa`.
+bol(!ho wa ho);
+bol(!haina ra haina);
+bol(!ho ra ho);
+
+// Parentheses put it back on the outside.
+bol(!(ho ra haina));
+bol(!(haina wa haina));
+bol(!(1 < 2));
+
+// On a variable, on a call's result, and as a condition.
+thoos flag = haina;
+bol(!flag);
+bol(!no());
+
+yedi (!haina) {
+    bol(10);
+} natra {
+    bol(20);
+}
+
+thoos done = haina;
+jabasamma (!done) {
+    bol(77);
+    done = ho;
+}

@@ -32,6 +32,8 @@ pub enum Token {
     Bang,
 
     Assign,
+    BooleanAnd,
+    BooleanOr,
     Equal,
     NotEqual,
     Less,
@@ -69,6 +71,8 @@ pub fn keyword_or_identifier(word: &str) -> Token {
         "haina" => Token::False,
         "jabasamma" => Token::While,
         "fanfani" => Token::For,
+        "ra" => Token::BooleanAnd,
+        "wa" => Token::BooleanOr,
         _ => Token::Identifier(word.to_owned()),
     }
 }
@@ -128,6 +132,8 @@ impl fmt::Display for Token {
             Token::LessOrEqual => "<=",
             Token::Greater => ">",
             Token::GreaterOrEqual => ">=",
+            Token::BooleanAnd => "ra",
+            Token::BooleanOr => "wa",
 
             Token::Comma => ",",
             Token::Semicolon => ";",

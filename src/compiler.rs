@@ -172,7 +172,7 @@ impl Compiler {
         self.emit_line(&format!("// {text}"));
     }
 
-    fn emit_comparison(&mut self, condition: &str) {
+    fn emit_comparison_result_to_x0(&mut self, condition: &str) {
         self.emit_line("cmp x1, x0");
         self.emit_line(&format!("cset x0, {condition}"));
     }
@@ -317,9 +317,6 @@ impl Compiler {
                 ));
                 self.emit_outer_level_line(".p2align 2");
                 self.emit_outer_level_line(&format!("{}:", definition.name));
-                // Function take up a frame size that is equal to
-                // - frame size taken up by all the statements in its body AND
-                // - number of arguments the function accepts
                 let frame_size_for_function_body_statements =
                     frame_size_for_statements(&definition.body.statements);
                 let frame_size_for_parameters = definition.parameters.len() * 16;
@@ -362,6 +359,7 @@ impl Compiler {
                     self.emit_essembly_to_destroy_all_frames_upto_enclosing_function();
                     self.emit_line("ret");
                 }
+                self.pop_frame();
                 self.end_current_section_and_register_it();
                 Ok(())
             }
@@ -534,7 +532,12 @@ impl Compiler {
                         Ok(())
                     }
                     UnaryOperator::Not => {
-                        todo!("Unary not is not implemented")
+                        self.emit_comment("unary !");
+                        self.pop_to_x0();
+                        self.emit_line("cmp x0, #0");
+                        self.emit_line("cset x0, eq");
+                        self.push_from_x0();
+                        Ok(())
                     }
                 }
             }
@@ -561,12 +564,18 @@ impl Compiler {
                         self.emit_line("sdiv x2, x1, x0");
                         self.emit_line("msub x0, x2, x0, x1");
                     }
-                    BinaryOperator::Equal => self.emit_comparison("eq"),
-                    BinaryOperator::NotEqual => self.emit_comparison("ne"),
-                    BinaryOperator::Less => self.emit_comparison("lt"),
-                    BinaryOperator::LessOrEqual => self.emit_comparison("le"),
-                    BinaryOperator::Greater => self.emit_comparison("gt"),
-                    BinaryOperator::GreaterOrEqual => self.emit_comparison("ge"),
+                    BinaryOperator::Equal => self.emit_comparison_result_to_x0("eq"),
+                    BinaryOperator::NotEqual => self.emit_comparison_result_to_x0("ne"),
+                    BinaryOperator::Less => self.emit_comparison_result_to_x0("lt"),
+                    BinaryOperator::LessOrEqual => self.emit_comparison_result_to_x0("le"),
+                    BinaryOperator::Greater => self.emit_comparison_result_to_x0("gt"),
+                    BinaryOperator::GreaterOrEqual => self.emit_comparison_result_to_x0("ge"),
+                    BinaryOperator::BooleanAnd => {
+                        self.emit_line("and x0, x0, x1");
+                    }
+                    BinaryOperator::BooleanOr => {
+                        self.emit_line("orr x0, x0, x1");
+                    }
                 }
 
                 // Push back onto the stack

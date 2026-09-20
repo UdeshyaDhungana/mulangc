@@ -22,6 +22,8 @@ use crate::syntax::token::{SpannedToken, Token};
 enum Precedence {
     Lowest,
     Assignment,
+    BooleanOr,
+    BooleanAnd,
     Equality,
     Comparison,
     Sum,
@@ -547,6 +549,8 @@ fn conditional_end_span(conditional: &Conditional) -> Span {
 fn precedence_of(token: &Token) -> Precedence {
     match token {
         Token::Assign => Precedence::Assignment,
+        Token::BooleanOr => Precedence::BooleanOr,
+        Token::BooleanAnd => Precedence::BooleanAnd,
         Token::Equal | Token::NotEqual => Precedence::Equality,
         Token::Less | Token::LessOrEqual | Token::Greater | Token::GreaterOrEqual => {
             Precedence::Comparison
@@ -571,6 +575,8 @@ fn binary_operator_of(token: &Token) -> Option<BinaryOperator> {
         Token::LessOrEqual => BinaryOperator::LessOrEqual,
         Token::Greater => BinaryOperator::Greater,
         Token::GreaterOrEqual => BinaryOperator::GreaterOrEqual,
+        Token::BooleanAnd => BinaryOperator::BooleanAnd,
+        Token::BooleanOr => BinaryOperator::BooleanOr,
         _ => return None,
     })
 }
