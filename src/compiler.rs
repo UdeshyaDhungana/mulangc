@@ -177,6 +177,34 @@ impl Compiler {
         self.emit_line(&format!("cset x0, {condition}"));
     }
 
+    fn emit_load_immediate_into_x0(&mut self, value: i64) {
+        self.emit_comment(&format!("Loading immediate `{value}` onto x0"));
+        let bits = value as u64;
+        let mut placed_first_halfword = false;
+
+        for index in 0..4 {
+            let shift = index * 16;
+            let halfword = (bits >> shift) & 0xFFFF;
+
+            // Prevent double-zeroing
+            if halfword == 0 {
+                continue;
+            }
+
+            let instruction = if placed_first_halfword {
+                "movk"
+            } else {
+                "movz"
+            };
+            self.emit_line(&format!("{instruction} x0, #{halfword}, lsl #{shift}"));
+            placed_first_halfword = true;
+        }
+
+        if !placed_first_halfword {
+            self.emit_line("movz x0, #0");
+        }
+    }
+
     /// Push `x0` onto the stack.
     /// A value occupies 16 bytes rather than 8 because `sp` must stay 16-byte
     /// aligned at every instruction, so the upper half of each slot is padding.
@@ -483,7 +511,7 @@ impl Compiler {
             }
             ExpressionKind::Integer(integer) => {
                 self.emit_comment(&format!("literal {integer}"));
-                self.emit_line(&format!("mov x0, #{integer}"));
+                self.emit_load_immediate_into_x0(*integer);
                 self.push_from_x0();
                 Ok(())
             }

@@ -1,6 +1,4 @@
 
-dhanda keinagar() {
-    bol(34);
-}
+thoos x = 100000;
 
-keinagar();
+bol(x);
