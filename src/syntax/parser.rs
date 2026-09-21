@@ -41,7 +41,13 @@ pub fn parse(tokens: &[SpannedToken]) -> Result<Program, Vec<Diagnostic>> {
     let statements = parser.parse_program();
 
     if parser.diagnostics.is_empty() {
-        Ok(Program { statements })
+        let span = match (tokens.first(), tokens.last()) {
+            (Some(first), Some(last)) => first.span.joined_with(last.span),
+            _ => Span::new(0, 0),
+        };
+        Ok(Program {
+            block: Block { statements, span },
+        })
     } else {
         Err(parser.diagnostics)
     }
@@ -408,7 +414,7 @@ impl Parser<'_> {
         Ok(Statement {
             span: start.joined_with(body.span),
             kind: StatementKind::Function(FunctionDefinition {
-                name,
+                identifier: name,
                 parameters,
                 body,
             }),
@@ -482,7 +488,11 @@ impl Parser<'_> {
         };
         let span = self.current_span();
         self.advance();
-        Ok(Identifier { name, span })
+        Ok(Identifier {
+            name,
+            span,
+            id: None,
+        })
     }
 
     /// `thoos` and `de` both require a closing `;`, unlike a
@@ -514,7 +524,11 @@ impl Parser<'_> {
 fn callee_of(expression: Expression) -> Result<Identifier, Diagnostic> {
     let span = expression.span;
     match expression.kind {
-        ExpressionKind::Identifier(name) => Ok(Identifier { name, span }),
+        ExpressionKind::Identifier(name) => Ok(Identifier {
+            name,
+            span,
+            id: None,
+        }),
         _ => Err(Diagnostic::error(span, "cannot call this expression")
             .with_help("only a named function can be called")),
     }
@@ -523,9 +537,11 @@ fn callee_of(expression: Expression) -> Result<Identifier, Diagnostic> {
 fn assignment_target_of(expression: Expression) -> Result<AssignmentTarget, Diagnostic> {
     let span = expression.span;
     match expression.kind {
-        ExpressionKind::Identifier(name) => {
-            Ok(AssignmentTarget::Variable(Identifier { name, span }))
-        }
+        ExpressionKind::Identifier(name) => Ok(AssignmentTarget::Variable(Identifier {
+            name,
+            span,
+            id: None,
+        })),
         _ => Err(Diagnostic::error(span, "cannot assign to this expression")
             .with_help("the left of `=` must be a variable")),
     }

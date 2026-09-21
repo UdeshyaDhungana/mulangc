@@ -14,12 +14,14 @@ use crate::diagnostics::Span;
 
 #[derive(Clone, Debug)]
 pub struct Program {
-    pub statements: Vec<Statement>,
+    pub block: Block,
 }
 
 #[derive(Clone, Debug)]
 pub struct Identifier {
     pub name: String,
+    // Populated during semantic analysis
+    pub id: Option<String>,
     pub span: Span,
 }
 
@@ -112,7 +114,7 @@ pub enum ExpressionKind {
 /// so building a closure could be a refcount bump, and mulang has no closures.
 #[derive(Clone, Debug)]
 pub struct FunctionDefinition {
-    pub name: Identifier,
+    pub identifier: Identifier,
     pub parameters: Vec<Identifier>,
     pub body: Block,
 }
@@ -199,7 +201,7 @@ impl fmt::Display for BinaryOperator {
 
 impl fmt::Display for Program {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_statements(formatter, &self.statements, 0)
+        write_statements(formatter, &self.block.statements, 0)
     }
 }
 
@@ -269,7 +271,7 @@ fn write_statement(
         // A block-bodied statement ends at its `}`; no `;` follows it, and
         // `write_statements` supplies the newline.
         StatementKind::Function(definition) => {
-            write!(formatter, "dhanda {}(", definition.name)?;
+            write!(formatter, "dhanda {}(", definition.identifier)?;
             write_separated(
                 formatter,
                 &definition.parameters,

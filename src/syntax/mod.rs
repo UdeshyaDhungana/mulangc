@@ -8,6 +8,7 @@
 pub mod ast;
 mod lexer;
 mod parser;
+pub mod sema;
 mod token;
 
 pub use ast::{
@@ -128,7 +129,7 @@ mod tests {
         let program =
             parse("yedi (a) { 1; } natra yedi (b) { 2; } natra { 3; }").expect("should parse");
 
-        let StatementKind::If(outer) = &program.statements[0].kind else {
+        let StatementKind::If(outer) = &program.block.statements[0].kind else {
             panic!("expected an if statement");
         };
         let Some(Else::If(middle)) = outer.otherwise.as_deref() else {
@@ -195,10 +196,13 @@ mod tests {
     fn a_conditional_is_never_the_callee_of_a_call() {
         let program = parse("yedi (a) { 1; } (2);").expect("should parse");
 
-        assert_eq!(program.statements.len(), 2);
-        assert!(matches!(program.statements[0].kind, StatementKind::If(..)));
+        assert_eq!(program.block.statements.len(), 2);
         assert!(matches!(
-            program.statements[1].kind,
+            program.block.statements[0].kind,
+            StatementKind::If(..)
+        ));
+        assert!(matches!(
+            program.block.statements[1].kind,
             StatementKind::Expression(..)
         ));
     }

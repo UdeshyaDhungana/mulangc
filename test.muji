@@ -1,3 +1,10 @@
 // Two failures. Every line below passes on its own; only the whole file hangs.
 
-bol(ho ra ho);
+dhanda muji() {
+}
+
+dhanda idd(x, x) {
+    de 3;
+}
+
+bol(idd(1,2,3));

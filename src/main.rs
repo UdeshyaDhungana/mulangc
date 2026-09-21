@@ -5,9 +5,10 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::thread;
 
-use mulang::compiler::{Compiler, REQUIRED_STACK_BYTES};
+use mulang::compiler::{CodeGenerator, REQUIRED_STACK_BYTES};
 use mulang::diagnostics::render_all;
 use mulang::syntax;
+use mulang::syntax::sema::Sema;
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -69,13 +70,23 @@ fn compile_file(path: &str) -> ExitCode {
         }
     };
 
-    let mut compiler = Compiler::new(file_name_without_extension);
+    let mut sema = Sema::new();
 
-    match compiler.compile(&program) {
-        Ok(_) => ExitCode::SUCCESS,
+    match sema.analyse(&program) {
         Err(diagnostic) => {
             eprint!("{}", diagnostic.render(&source, path));
             ExitCode::FAILURE
+        }
+        Ok(..) => {
+            let mut code_generator = CodeGenerator::new(file_name_without_extension);
+
+            match code_generator.generate(&program) {
+                Ok(_) => ExitCode::SUCCESS,
+                Err(diagnostic) => {
+                    eprint!("{}", diagnostic.render(&source, path));
+                    ExitCode::FAILURE
+                }
+            }
         }
     }
 }

@@ -56,7 +56,7 @@ struct Section {
     lines: Vec<String>,
 }
 
-pub struct Compiler {
+pub struct CodeGenerator {
     // Static scope
     static_frames: Vec<Frame>,
     output_file: String,
@@ -67,7 +67,7 @@ pub struct Compiler {
     counter: Counter,
 }
 
-impl Compiler {
+impl CodeGenerator {
     pub fn new(output_file: &str) -> Self {
         Self {
             output_file: output_file.to_string(),
@@ -225,7 +225,7 @@ impl Compiler {
         self.static_frames.last_mut().unwrap()
     }
 
-    pub fn compile(&mut self, program: &Program) -> Result<(), Diagnostic> {
+    pub fn generate(&mut self, program: &Program) -> Result<(), Diagnostic> {
         self.begin_new_text_section();
         self.emit_preamble();
         // Very much later in our lifetime, we'd witness linking, and include and everythang
@@ -235,10 +235,10 @@ impl Compiler {
         self.emit_outer_level_line(".p2align 2");
         self.emit_outer_level_line("_main:");
         self.push_static_frame_and_emit_frame_push_assembly(
-            frame_size_for_statements(&program.statements),
+            frame_size_for_statements(&program.block.statements),
             true,
         );
-        for statement in &program.statements {
+        for statement in &program.block.statements {
             self.emit_statement_assembly(statement)?;
         }
         // return 0;
@@ -292,9 +292,9 @@ impl Compiler {
             }
             StatementKind::Function(definition) => {
                 self.begin_new_text_section();
-                self.emit_outer_level_line(&format!("// dhanda {}", definition.name,));
+                self.emit_outer_level_line(&format!("// dhanda {}", definition.identifier,));
                 self.emit_outer_level_line(".p2align 2");
-                self.emit_outer_level_line(&format!("{}:", definition.name));
+                self.emit_outer_level_line(&format!("{}:", definition.identifier));
 
                 // Save the frame pointer so later, it can be used to retrieve arguments
                 self.emit_line("mov x9, sp");
