@@ -1,7 +1,3 @@
 // Two failures. Every line below passes on its own; only the whole file hangs.
 
-dhanda saykada(a, b, c) {
-    de a * 100 + b * 10 + c;
-}
-
-bol(saykada(1,2,3));
+bol(ho ra ho);

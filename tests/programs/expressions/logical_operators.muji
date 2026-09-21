@@ -1,4 +1,5 @@
-// `ra` (and) and `wa` (or) take booleans, which are 1 and 0 internally.
+// `ra` (and) and `wa` (or) are boolean, not bitwise. Any non-zero operand
+// counts as true, and the result is always 1 or 0.
 // Both operands are always evaluated.
 
 dhanda noise() {
@@ -27,6 +28,37 @@ bol(1 < 2 ra 3 < 4);
 bol(1 < 2 ra 4 < 3);
 bol(1 > 2 wa 3 < 4);
 bol(2 == 2 ra 2 != 2);
+
+// Non-zero integers are true, zero is false, and the result narrows to 1 or 0.
+// A bitwise `and` would give 0, 2 and -8 for the three `ra` lines below, and a
+// bitwise `orr` would give 7 and -5 for the two `wa` lines.
+bol(4 ra 2);
+bol(2 ra 3);
+bol(-7 ra -2);
+bol(5 ra 0);
+bol(0 ra 5);
+bol(5 wa 3);
+bol(-7 wa 2);
+bol(0 wa 8);
+bol(0 wa 0);
+
+// The narrowed result feeds back into the operators, so nesting stays 1 or 0.
+bol(3 ra 4 wa 0);
+bol(9 wa 0 ra 6);
+
+// As a stored value, and as a condition.
+thoos c = 7 ra 9;
+bol(c);
+
+yedi (6 ra 3) {
+    bol(40);
+}
+
+yedi (0 wa 0) {
+    bol(50);
+} natra {
+    bol(60);
+}
 
 // Both sides run: `noise` prints even when the left operand already
 // determines the result.

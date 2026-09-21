@@ -543,9 +543,17 @@ impl Compiler {
                     BinaryOperator::Greater => self.emit_comparison_result_to_x0("gt"),
                     BinaryOperator::GreaterOrEqual => self.emit_comparison_result_to_x0("ge"),
                     BinaryOperator::BooleanAnd => {
+                        self.emit_line("cmp x0, #0");
+                        self.emit_line("cset x0, ne");
+                        self.emit_line("cmp x1, #0");
+                        self.emit_line("cset x1, ne");
                         self.emit_line("and x0, x0, x1");
                     }
                     BinaryOperator::BooleanOr => {
+                        self.emit_line("cmp x0, #0");
+                        self.emit_line("cset x0, ne");
+                        self.emit_line("cmp x1, #0");
+                        self.emit_line("cset x1, ne");
                         self.emit_line("orr x0, x0, x1");
                     }
                 }
