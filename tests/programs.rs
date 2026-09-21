@@ -74,7 +74,10 @@ fn collect_programs_under(directory: &Path, programs: &mut Vec<PathBuf>) {
 
         if path.is_dir() {
             collect_programs_under(&path, programs);
-        } else if path.extension().is_some_and(|extension| extension == "muji") {
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension == "muji")
+        {
             programs.push(path);
         }
     }
@@ -248,7 +251,10 @@ fn difference(expected: &str, actual: &str) -> String {
         let right = actual.get(line).copied().unwrap_or("<missing>");
         let marker = if left == right { ' ' } else { '*' };
 
-        report.push_str(&format!("  {marker} {:>4} | {left:>8} | {right}\n", line + 1));
+        report.push_str(&format!(
+            "  {marker} {:>4} | {left:>8} | {right}\n",
+            line + 1
+        ));
     }
 
     report

@@ -146,7 +146,10 @@ mod tests {
 
     #[test]
     fn parses_a_function_with_no_parameters() {
-        assert_eq!(reprint("dhanda one() { de 1; }"), "dhanda one() {\n    de 1;\n}");
+        assert_eq!(
+            reprint("dhanda one() { de 1; }"),
+            "dhanda one() {\n    de 1;\n}"
+        );
     }
 
     #[test]
