@@ -1,8 +1,9 @@
 # mulang
 
 A toolchain for the **muji** programming language, written in Rust. The
-language is unchanged from [muji-lang](https://github.com/UdeshyaDhungana/muji-lang);
-this is a rewrite of the implementation.
+language started from [muji-lang](https://github.com/UdeshyaDhungana/muji-lang);
+this is a rewrite of the implementation, and the language has been trimmed
+along the way — see [Not in the language](#not-in-the-language).
 
 Compiles to macOS ARM64 assembly. `mulang program.muji` writes `program.s`,
 which you then assemble and link:
@@ -15,7 +16,8 @@ clang -o program program.s
 ./program
 ```
 
-`./test.sh` does all three for `test.muji`.
+`./test.sh` does all three for `test.muji`, and prints the generated assembly
+on the way past.
 
 ## The language
 
@@ -23,30 +25,31 @@ clang -o program program.s
 
 ```muji
 thoos x = 43;
+x = x + 1;
 ```
 
-Types: integer, decimal, string, boolean.
+The only values are 64-bit signed integers and booleans, and booleans are just
+`1` and `0`, so the two are freely mixed. A declaration is a statement; an
+assignment is an *expression*, so it has a value and `x = y = 3` works, binding
+to the right.
 
-### Functions (Yet to implement manual functions) (Statement)
+### Functions (Statement)
 
 ```muji
-thoos add = dhanda(x, y) {
-    de x + y;
-};
-add(6, 9);
+dhanda add(a, b) {
+    de a + b;
+}
+
+bol(add(6, 9));
 ```
 
-Functions are values: pass them, return them, call them where they stand.
+Functions are declarations, not values — there are no closures and no anonymous
+functions, and a name always refers to a variable. They may be called before the
+line they are declared on.
 
-```muji
-thoos adder = dhanda(x) {
-    de dhanda(y) { de x + y; };
-};
-adder(2)(3);    // 5
-```
-
-A function yields its `de` value, or its last statement's value if it
-has no `de`.
+A function yields its `de` value; `de` always needs an expression after it.
+Falling off the end without reaching a `de` yields `0`. Arguments past the
+eighth are passed on the stack.
 
 ### Booleans and conditionals (Statements)
 
@@ -57,15 +60,15 @@ thoos no = haina;
 thoos n = 0;
 yedi (n > 0) {
     bol(1);
-} nabhae (n < 0) {
+} natra yedi (n < 0) {
     bol(-1);
 } natra {
     bol(0);
 }
 ```
 
-Both `nabhae` and `natra` are optional. Only `haina` and
-`khali_muji` are false — `0` and `""` are both true.
+`natra` is optional, and an `else if` arm is spelled `natra yedi`. Anything
+non-zero is true; `0` and `haina` are false.
 
 ### Loops (Statements)
 
@@ -80,8 +83,31 @@ fanfani (thoos i = 0; i < 42; i = i + 1) {
 }
 ```
 
-The `fanfani` initialiser may declare (`thoos i = 0`) or assign
-(`i = 0`). A loop variable it declares is gone once the loop ends.
+The `fanfani` initialiser may declare (`thoos i = 0`) or assign (`i = 0`). A
+loop variable it declares is gone once the loop ends.
+
+### Operators
+
+| | Operators | Notes |
+| --- | --- | --- |
+| Prefix | `-` `!` | `!` yields `1` or `0` |
+| Arithmetic | `*` `/` `%` `+` `-` | integer division, truncating |
+| Comparison | `<` `<=` `>` `>=` | |
+| Equality | `==` `!=` | |
+| Boolean and | `ra` | |
+| Boolean or | `wa` | |
+| Assignment | `=` | right-associative |
+
+Listed loosest last. Everything else is left-associative, and parentheses
+override precedence.
+
+`ra` and `wa` are boolean, not bitwise: any non-zero operand counts as true and
+the result is always `1` or `0`, so `4 ra 2` is `1`. Both sides are always
+evaluated — there is no short-circuiting, so `n != 0 ra 10 / n` still divides
+when `n` is `0`.
+
+Division by zero is whatever the hardware does. AArch64's `sdiv` does not trap:
+`x / 0` is `0`, and `x % 0` is `x`.
 
 ### Comments
 
@@ -95,8 +121,15 @@ There is no block comment form.
 
 | Builtin | Takes | Does |
 | --- | --- | --- |
-| `bol(…)` | anything | prints its arguments and a newline |
-| `abs(x)` | integer, decimal | absolute value |
+| `bol(x)` | exactly one integer | prints it and a newline |
+
+`abs` is recognised but not implemented yet.
+
+### Not in the language
+
+Decimals, strings, arrays, hash maps, functions as values, and every builtin
+other than `bol`. The lexer rejects decimal and string literals by name, so
+they fail with a diagnostic rather than a parse error.
 
 ## Layout
 
@@ -119,12 +152,15 @@ without anything downstream noticing.
 Every node carries the span it was parsed from, so errors point at source:
 
 ```
-error: division by zero
- --> program.muji:2:11
+error: `y` is not a valid identifier
+ --> program.muji:2:5
   |
-2 | bol(x / 0);
-  |           ^^^^^
+2 | bol(y + 1);
+  |     ^
 ```
+
+Parse errors are collected in one pass and reported together; the compiler
+stops at the first one it hits.
 
 ## Tests
 
@@ -135,12 +171,13 @@ cargo test
 Unit tests sit next to what they cover: the lexer, the parser, and diagnostics.
 
 `tests/programs/` is the end-to-end suite, and the only thing that exercises
-code generation. Each `NAME.muji` has a `NAME.out` holding the exact stdout it
-must produce, and optionally a `NAME.exit` holding its exit code (default `0`).
-`tests/programs.rs` compiles each one in its own scratch directory under
-`target/muji-tests/`, assembles it with `clang`, runs it, and compares. The
-artifacts are left in place, so a failing program's generated assembly is right
-there to read.
+code generation. It is grouped into `expressions/`, `statements/`,
+`control_flow/` and `functions/`. Each `NAME.muji` has a `NAME.out` holding the
+exact stdout it must produce, and optionally a `NAME.exit` holding its exit code
+(default `0`). `tests/programs.rs` compiles each one in its own scratch
+directory under `target/muji-tests/`, assembles it with `clang`, runs it, and
+compares. The artifacts are left in place, so a failing program's generated
+assembly is right there to read.
 
 Adding a case is two files and no code. **Requires `clang` on your path.**
 
@@ -149,14 +186,16 @@ Adding a case is two files and no code. **Requires `clang` on your path.**
 ## TODOs
 - [x] **Unary** — `-x` → `neg x0, x0`. `!x` → `cmp x0, #0` then `cset x0, eq`.
 - [x] **Booleans** — `ho`/`haina` → `mov x0, #1` / `mov x0, #0`.
-- [x] **Then control flow — this is the next real step:**
-- [x] **A label counter** on `Compiler`, plus an `emit_label` helper. Everything below needs unique labels (`.Lif0`, `.Lelse0`, `.Lend0`).
-- [x] **`yedi`** — `cmp x0, #0`, `b.eq .Lelse`, body, `b .Lend`. New instructions: `b` (unconditional), `b.eq`/`b.ne` (conditional), `cbz`/`cbnz` (branch if register is zero / nonzero — shorter than `cmp`+`b.eq`).
-- [x] **`nabhae` chain + `natra`** — just more labels, no new concepts.
-- [x] **`jabasamma`** — the only new idea is a *backward* branch: label at the top, condition, body, `b` back.
-- [x] **`fanfani`** — initialiser, then the same loop shape, with the update emitted before the backward branch.
-- [X] Scoping
-- [X] Manual functions
-- [X] Remove: Arrays, hashmaps
-- [X] Delete all builtins except abs
+- [x] **Control flow** — a label counter on `Compiler`, `yedi` / `natra yedi` /
+      `natra`, `jabasamma`, and `fanfani`.
+- [x] Scoping
+- [x] Manual functions, including recursion, forward references, and implicit
+      return
+- [x] More than 8 arguments (the rest spill to the stack)
+- [x] 8-byte immediates (`movz` / `movk`)
+- [x] Remove arrays and hash maps; delete every builtin except `abs`
+- [x] Boolean `ra` / `wa` instead of bitwise `and` / `orr`
+- [ ] Short-circuit `ra` / `wa`
+- [ ] Implement `abs`
+- [ ] Function scope barrier — a function currently sees enclosing frames
 - [ ] Tighten every statement is an expression constraint using LLM

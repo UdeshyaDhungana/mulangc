@@ -24,14 +24,9 @@ const SLOT_SIZE: usize = 8;
 /// is always rounded up to a multiple of this.
 const STACK_ALIGNMENT: usize = 16;
 
+#[derive(Default)]
 struct Counter {
     count: i64,
-}
-
-impl Default for Counter {
-    fn default() -> Self {
-        Self { count: 0 }
-    }
 }
 
 impl Counter {
@@ -56,14 +51,9 @@ impl Frame {
     }
 }
 
+#[derive(Default)]
 struct Section {
     lines: Vec<String>,
-}
-
-impl Default for Section {
-    fn default() -> Self {
-        Self { lines: Vec::new() }
-    }
 }
 
 pub struct Compiler {
@@ -110,7 +100,7 @@ impl Compiler {
             Frame {
                 size: frame_size,
                 offset_map: HashMap::new(),
-                is_functional: is_functional,
+                is_functional,
             }
         });
 
@@ -732,7 +722,7 @@ impl Compiler {
     }
 }
 
-fn frame_size_for_statements(statements: &Vec<Statement>) -> usize {
+fn frame_size_for_statements(statements: &[Statement]) -> usize {
     let local_count = statements
         .iter()
         .filter(|statement| matches!(statement.kind, StatementKind::Declaration { .. }))
