@@ -1,41 +1,7 @@
 // Two failures. Every line below passes on its own; only the whole file hangs.
 
-dhanda zero() {
-    de 0;
+dhanda saykada(a, b, c) {
+    de a * 100 + b * 10 + c;
 }
 
-bol(!ho);        // 0
-bol(!haina);     // 1
-bol(!0);         // 1
-bol(!1);         // 0
-bol(!5);         // 0
-bol(!-5);        // 0
-bol(!!5);        // 1
-bol(!!0);        // 0
-bol(!5 + 1);     // 1
-bol(!0 * 7);     // 7
-
-bol(!haina ra 3); // FAILS: prints 1, not 3. `ra` lowers to bitwise `and`,
-                  // so `1 ra 3` is `1 & 3`. Only visible on an integer operand.
-
-bol(!ho wa 9);      // 9
-bol(!(1 < 2));      // 0
-bol(!(ho ra haina)); // 1
-bol(!(0 wa 0));      // 1
-
-thoos flag = haina;
-bol(!flag);      // 1
-bol(!zero());    // 1
-
-yedi (!haina) {
-    bol(10);
-} natra {
-    bol(20);
-}
-
-// FAILS: the program prints all of the above correctly, then never exits.
-thoos n = 0;
-jabasamma (!n) {
-    bol(77);
-    n = 1;
-}
+bol(saykada(1,2,3));

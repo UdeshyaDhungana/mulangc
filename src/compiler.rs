@@ -96,7 +96,7 @@ impl Compiler {
         self.text_section_stack.last_mut().unwrap()
     }
 
-    fn end_current_text_section_and_register(&mut self) {
+    fn end_and_register_current_text_section(&mut self) {
         self.registered_text_sections
             .push(self.text_section_stack.pop().unwrap())
     }
@@ -255,7 +255,7 @@ impl Compiler {
         self.emit_line("mov x0, #0");
         self.pop_static_frame_and_emit_frame_release_assembly();
         self.emit_line("ret");
-        self.end_current_text_section_and_register();
+        self.end_and_register_current_text_section();
         self.write_assembly_file()
     }
 
@@ -302,57 +302,51 @@ impl Compiler {
             }
             StatementKind::Function(definition) => {
                 self.begin_new_text_section();
-                self.emit_outer_level_line(&format!(
-                    "// dhanda {}({})",
-                    definition.name,
-                    definition
-                        .parameters
-                        .iter()
-                        .map(|parameter| parameter.name.as_str())
-                        .collect::<Vec<&str>>()
-                        .join(", ")
-                ));
+                self.emit_outer_level_line(&format!("// dhanda {}", definition.name,));
                 self.emit_outer_level_line(".p2align 2");
                 self.emit_outer_level_line(&format!("{}:", definition.name));
-                let frame_size_for_function_body_statements =
-                    frame_size_for_statements(&definition.body.statements);
-                let frame_size_for_parameters = definition.parameters.len() * 16;
-                // TODO: When we support more than 8 arguments, we'll run out of registers and
-                // will have to use the stack, in that case, we need to find a way to preserve the locations
-                // of the stack-living arguments so we can push them again later in the function body
+
+                // Save the frame pointer so later, it can be used to retrieve arguments
+                self.emit_line("mov x9, sp");
+
                 self.push_static_frame_and_emit_frame_push_assembly(
-                    frame_size_for_function_body_statements + frame_size_for_parameters,
+                    frame_size_for_statements(&definition.body.statements)
+                        + (definition.parameters.len() * 16),
                     true,
                 );
+
                 for (idx, parameter) in definition.parameters.iter().enumerate() {
                     let next_offset = self.get_topmost_static_frame().get_next_offset();
                     self.get_topmost_static_frame()
                         .offset_map
                         .insert(parameter.name.clone(), next_offset);
-                    // Get where that variable lives
-                    // Later on we'll have to make this dynamic to fetch these from stack
-                    let register_name = format!("x{}", idx);
-                    self.emit_line(&format!("str {register_name}, [x29, #{next_offset}]"));
+                    if idx < 8 {
+                        let register_name = format!("x{}", idx);
+                        self.emit_line(&format!("str {register_name}, [x29, #{next_offset}]"));
+                    } else {
+                        let offset_from_old_sp = (idx - 8) * 16;
+                        self.emit_line(&format!("ldr x10, [x9, #{offset_from_old_sp}]"));
+                        self.emit_line(&format!("str x10, [x29, #{next_offset}]"));
+                    }
                 }
-                self.emit_newline();
+
                 let mut has_return = false;
                 for statement in definition.body.statements.iter() {
                     self.emit_statement_assembly(statement)?;
-                    match statement.kind {
-                        StatementKind::Return(..) => {
-                            has_return = true;
-                        }
-                        _ => {}
+                    if matches!(statement.kind, StatementKind::Return(..)) {
+                        has_return = true;
                     }
                 }
+
                 // Return void if a function doesn't contain a return statement
                 if !has_return {
                     self.emit_line("mov x0, #0");
                     self.emit_essembly_to_destroy_all_frames_until_first_enclosing_function();
                     self.emit_line("ret");
                 }
+
                 self.pop_static_frame_and_emit_frame_release_assembly();
-                self.end_current_text_section_and_register();
+                self.end_and_register_current_text_section();
                 Ok(())
             }
             StatementKind::If(conditional) => self.emit_conditional_assembly(conditional),
@@ -616,17 +610,33 @@ impl Compiler {
 
                 // Match against the builtin functions first
                 let Ok(builtin) = callee.name.parse::<BuiltinFunctions>() else {
-                    if arguments.len() > 8 {
-                        todo!("Not supported more than 8 arguments");
+                    // Stack arguments
+                    for argument in arguments.iter().skip(8).rev() {
+                        self.emit_expression_evaluation_assembly_and_push_evaluated(argument)?;
+                        self.pop_to_x0();
+                        self.push_from_x0();
                     }
-                    for argument in arguments.iter() {
+
+                    let register_arguments: Vec<&Expression> = arguments.iter().take(8).collect();
+
+                    for argument in register_arguments.iter().rev() {
                         self.emit_expression_evaluation_assembly_and_push_evaluated(argument)?;
                     }
-                    for idx in (0..arguments.len()).rev() {
+
+                    for idx in 0..register_arguments.len() {
                         let register = format!("x{idx}");
                         self.emit_line(&format!("ldr {register}, [sp], #16"));
                     }
+
                     self.emit_line(&format!("bl {}", callee.name));
+
+                    // Pop stack arguments
+                    if arguments.len() > 8 {
+                        for _ in 0..(arguments.len() - 8) {
+                            self.pop_and_ignore_void();
+                        }
+                    }
+
                     // Push the value onto the stack
                     self.push_from_x0();
                     return Ok(());
