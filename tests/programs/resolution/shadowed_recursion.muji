@@ -1,0 +1,15 @@
+// A nested dhanda carrying the same name as the dhanda enclosing it,
+// called after its definition. Resolving the call to the outer one instead
+// would recurse forever.
+
+dhanda step(n) {
+    dhanda step(m) {
+        de m * 10;
+    }
+    de step(n) + 1;
+}
+
+dhanda muji() {
+    bol(step(2));
+    bol(step(0));
+}

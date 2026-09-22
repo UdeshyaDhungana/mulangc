@@ -1,0 +1,19 @@
+// A nested dhanda calling a top-level dhanda defined further down the
+// file, so the call resolves through the lookahead definitions rather than
+// the scope stack.
+
+dhanda outer() {
+    dhanda nested() {
+        de later() + 1;
+    }
+    de nested();
+}
+
+dhanda later() {
+    de 41;
+}
+
+dhanda muji() {
+    bol(outer());
+    bol(later());
+}

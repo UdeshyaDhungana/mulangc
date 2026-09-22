@@ -1,0 +1,23 @@
+// Two unrelated dhandas each defining their own `helper`. The two inner
+// definitions need labels of their own, and each call has to land on the
+// one beside it.
+
+dhanda first() {
+    dhanda helper() {
+        de 10;
+    }
+    de helper();
+}
+
+dhanda second() {
+    dhanda helper() {
+        de 20;
+    }
+    de helper();
+}
+
+dhanda muji() {
+    bol(first());
+    bol(second());
+    bol(first() + second());
+}

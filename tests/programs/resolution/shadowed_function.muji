@@ -1,0 +1,20 @@
+// A nested dhanda shadowing a top-level one of the same name. The call
+// inside the enclosing dhanda must reach the inner definition, and the
+// call in muji the outer one.
+
+dhanda value() {
+    de 1;
+}
+
+dhanda wrapper() {
+    dhanda value() {
+        de 2;
+    }
+    de value();
+}
+
+dhanda muji() {
+    bol(value());
+    bol(wrapper());
+    bol(value());
+}

@@ -9,13 +9,17 @@ use crate::{
     },
 };
 
-type ArgumentSize = usize;
+struct FunctionSymbolInfo {
+    identifier: Identifier,
+    arity: usize,
+}
 
 // I have a hunch that I'll change this to include types, etc.
 // after we incorporate them
 enum SymbolInfo {
-    Function(ArgumentSize),
-    Variable,
+    Function(FunctionSymbolInfo),
+    #[allow(dead_code)]
+    Variable(Identifier),
 }
 
 #[derive(Debug, PartialEq)]
@@ -26,7 +30,7 @@ enum ScopeType {
 }
 
 struct Scope {
-    symbol_table: HashMap<String, SymbolInfo>,
+    pub symbol_table: HashMap<String, SymbolInfo>,
     scope_type: ScopeType,
 }
 
@@ -39,14 +43,19 @@ impl Scope {
     }
 
     fn add_variable_identifier(&mut self, identifier: &Identifier) {
-        self.symbol_table
-            .insert(identifier.name.clone(), SymbolInfo::Variable);
-    }
-
-    fn add_function_identifier(&mut self, identifier: &Identifier, num_of_arguments: usize) {
         self.symbol_table.insert(
             identifier.name.clone(),
-            SymbolInfo::Function(num_of_arguments),
+            SymbolInfo::Variable(identifier.clone()),
+        );
+    }
+
+    fn add_function_identifier_with_arity(&mut self, identifier: &Identifier, arity: usize) {
+        self.symbol_table.insert(
+            identifier.name.clone(),
+            SymbolInfo::Function(FunctionSymbolInfo {
+                identifier: identifier.clone(),
+                arity,
+            }),
         );
     }
 
@@ -55,19 +64,53 @@ impl Scope {
     }
 }
 
-struct PendingFunctionDefinition {
-    name: String,
+struct LookaheadFunctionDefinition {
+    identifier: Identifier,
     arity: usize,
+}
+
+#[derive(Default)]
+pub struct Counter {
+    count: usize,
+}
+
+impl Counter {
+    pub fn next(&mut self) -> usize {
+        self.count += 1;
+        self.count - 1
+    }
+}
+
+#[derive(Debug)]
+pub struct Resolution {
+    pub map: HashMap<String, String>,
+    pub entry_point_node_id: Option<String>,
+}
+
+impl Default for Resolution {
+    fn default() -> Self {
+        Self {
+            map: HashMap::new(),
+            entry_point_node_id: None,
+        }
+    }
+}
+
+impl Resolution {
+    pub fn resolve(&self, caller_node_id: &String) -> String {
+        self.map
+            .get(caller_node_id)
+            .expect("Caller node id must have been resolved")
+            .clone()
+    }
 }
 
 pub struct Sema {
     // Stack of current scopes
     scopes_stack: Vec<Scope>,
-    main_function_found: bool,
-    lookahead_function_definitions: Vec<PendingFunctionDefinition>,
+    lookahead_function_definitions: Vec<LookaheadFunctionDefinition>,
+    resolution: Resolution,
 }
-
-pub struct Resolution {}
 
 impl Default for Sema {
     fn default() -> Self {
@@ -79,12 +122,12 @@ impl Sema {
     pub fn new() -> Self {
         Self {
             scopes_stack: Vec::new(),
-            main_function_found: false,
             lookahead_function_definitions: Vec::new(),
+            resolution: Default::default(),
         }
     }
 
-    fn get_enclosing_functional_scope(&mut self) -> Option<&mut Scope> {
+    fn get_enclosing_function_scope(&mut self) -> Option<&mut Scope> {
         for scope in self.scopes_stack.iter_mut().rev() {
             if scope.scope_type == ScopeType::Function {
                 return Some(scope);
@@ -130,18 +173,19 @@ impl Sema {
         self.scopes_stack.pop();
     }
 
-    pub fn analyse(&mut self, program: &Program) -> Result<(), Diagnostic> {
+    pub fn analyse(mut self, program: &Program) -> Result<Resolution, Diagnostic> {
         self.scopes_stack.push(Scope::new(ScopeType::Global));
 
         // DEBUG: Just add `bol` builtin so analyzer won't complain
-        self.get_current_scope().add_function_identifier(
+        self.get_current_scope().add_function_identifier_with_arity(
             &Identifier {
                 name: String::from("bol"),
-                id: None,
+                node_id: String::from("_debug_bol"),
                 span: Span::new(0, 0),
             },
             1,
         );
+        // END DEBUG
 
         for statement in &program.block.statements {
             // Only allow function and variable definitions in the outer scope
@@ -156,7 +200,7 @@ impl Sema {
 
                     if self.lookahead_function_definitions.iter().any(
                         |pending_function_definition| {
-                            pending_function_definition.name == identifier.name
+                            pending_function_definition.identifier.name == identifier.name
                         },
                     ) {
                         return Err(Diagnostic::error(
@@ -166,8 +210,8 @@ impl Sema {
                     }
 
                     self.lookahead_function_definitions
-                        .push(PendingFunctionDefinition {
-                            name: identifier.name.clone(),
+                        .push(LookaheadFunctionDefinition {
+                            identifier: identifier.clone(),
                             arity: parameters.len(),
                         })
                 }
@@ -186,14 +230,25 @@ impl Sema {
             self.analyse_statement(statement)?;
         }
 
-        if !self.main_function_found {
-            return Err(Diagnostic::error(
-                Span::new(0, 0),
-                "SEMA:: No `muji` function found",
-            ));
-        }
+        let diagnostic = Diagnostic::error(Span::new(0, 0), "No `muji` dhanda found");
 
-        Ok(())
+        // Check the existence of mukhya jimmewar function `muji`
+        match self.scopes_stack.first() {
+            Some(global_scope) => {
+                if let Some(muji) = global_scope.symbol_table.get("muji") {
+                    match muji {
+                        SymbolInfo::Function(muji_symbol_info) => {
+                            self.resolution.entry_point_node_id =
+                                Some(muji_symbol_info.identifier.node_id.clone());
+                            return Ok(self.resolution);
+                        }
+                        SymbolInfo::Variable(..) => return Err(diagnostic),
+                    }
+                }
+                return Err(diagnostic);
+            }
+            None => return Err(diagnostic),
+        }
     }
 
     fn analyse_block(&mut self, block: &Block) -> Result<(), Diagnostic> {
@@ -210,6 +265,7 @@ impl Sema {
             StatementKind::Declaration { identifier, value } => {
                 self.analyse_expression(value)?;
                 let identifier_name = identifier.name.clone();
+
                 if self
                     .get_current_scope()
                     .contains_identifier(identifier.name.clone())
@@ -223,7 +279,7 @@ impl Sema {
                 Ok(())
             }
             StatementKind::Return(expression) => {
-                let Some(_) = self.get_enclosing_functional_scope() else {
+                let Some(_) = self.get_enclosing_function_scope() else {
                     return Err(Diagnostic::error(
                         expression.span,
                         "`de` should be inside a `dhanda`",
@@ -238,9 +294,6 @@ impl Sema {
                 parameters,
             }) => {
                 let identifier_name = identifier.name.clone();
-                if identifier_name == "muji" {
-                    self.main_function_found = true;
-                }
 
                 if self
                     .get_current_scope()
@@ -252,9 +305,9 @@ impl Sema {
                     ));
                 }
 
-                // We should allow recursive calls
+                // We should allow recursive calls, so register early
                 self.get_current_scope()
-                    .add_function_identifier(identifier, parameters.len());
+                    .add_function_identifier_with_arity(identifier, parameters.len());
 
                 self.push_new_scope(Scope::new(ScopeType::Function));
                 for parameter in parameters {
@@ -333,60 +386,60 @@ impl Sema {
                 Ok(())
             }
             ExpressionKind::Call { callee, arguments } => {
-                if self.get_current_scope().scope_type == ScopeType::Global {
+                let Some(_) = self.get_enclosing_function_scope() else {
                     return Err(Diagnostic::error(
                         expression.span,
                         "SEMA:: Function calls are not allowed in global scope",
                     ));
-                }
+                };
 
                 let function_name = callee.name.clone();
+                let mut was_resolved_from_scope_stack = false;
 
-                // TODO: Refactor, this code
-                // Try from the symbol table first
+                // Check within the scope stack
+                // Scope stack takes priority over lookahead map
                 if let Some(symbol_info) = self.get_symbol_info(function_name.clone()) {
                     match symbol_info {
-                        SymbolInfo::Variable => {
+                        SymbolInfo::Variable(..) => {
                             return Err(Diagnostic::error(
                                 expression.span,
                                 "SEMA:: Called object is not a function".to_string(),
                             ));
                         }
-                        SymbolInfo::Function(num_of_parameters) => {
-                            (|| -> Result<(), Diagnostic> {
-                                if *num_of_parameters == arguments.len() {
-                                    return Ok(());
-                                }
-                                let few_many = if arguments.len() > *num_of_parameters {
+                        SymbolInfo::Function(FunctionSymbolInfo { arity, identifier }) => {
+                            if *arity != arguments.len() {
+                                let few_many = if arguments.len() > *arity {
                                     "many"
                                 } else {
                                     "few"
                                 };
 
                                 let error_pointer_span = expression.span.end - 1;
-                                Err(Diagnostic::error(
+                                return Err(Diagnostic::error(
                                     Span::new(error_pointer_span, error_pointer_span),
                                     format!(
                                         "SEMA:: too {few_many} arguments in call to `{function_name}`"
                                     ),
-                                ))
-                            })()?
+                                ));
+                            }
+                            was_resolved_from_scope_stack = true;
+                            self.resolution
+                                .map
+                                .insert(callee.node_id.clone(), identifier.node_id.clone());
                         }
                     }
-                } else {
-                    // Look up pending definitions
-                    if let Some(pending_function_definition) = self
+                }
+
+                // Check within the lookahead definitions
+                let mut was_resolved_from_lookahead_definitions = false;
+                if !was_resolved_from_scope_stack
+                    && let Some(fn_definition) = self
                         .lookahead_function_definitions
                         .iter()
-                        .find(|pending_function_definition| {
-                            pending_function_definition.name == function_name
-                        })
-                    {
-                        if pending_function_definition.arity == arguments.len() {
-                            return Ok(());
-                        }
-
-                        let few_many = if arguments.len() > pending_function_definition.arity {
+                        .find(|fn_definition| fn_definition.identifier.name == function_name)
+                {
+                    if fn_definition.arity != arguments.len() {
+                        let few_many = if arguments.len() > fn_definition.arity {
                             "many"
                         } else {
                             "few"
@@ -400,6 +453,13 @@ impl Sema {
                             ),
                         ));
                     }
+                    was_resolved_from_lookahead_definitions = true;
+                    self.resolution.map.insert(
+                        callee.node_id.clone(),
+                        fn_definition.identifier.node_id.clone(),
+                    );
+                }
+                if !was_resolved_from_scope_stack && !was_resolved_from_lookahead_definitions {
                     return Err(Diagnostic::error(
                         callee.span,
                         format!("SEMA:: Usage of undefined function {function_name}"),
@@ -436,7 +496,7 @@ mod tests {
 
     /// Every test source carries a `muji` function, since its absence is
     /// itself one of the things sema checks. `main_only` is the exception.
-    fn analyse(source: &str) -> Result<(), Diagnostic> {
+    fn analyse(source: &str) -> Result<Resolution, Diagnostic> {
         let program = parse(source)
             .unwrap_or_else(|diagnostics| panic!("should parse: {}", diagnostics[0].message));
         Sema::new().analyse(&program)

@@ -1,0 +1,17 @@
+// `bol` called from inside a nested dhanda, where it has to resolve to the
+// builtin's own label from two scopes down.
+
+dhanda report(n) {
+    dhanda show(value) {
+        bol(value);
+        de 0;
+    }
+    show(n);
+    show(n * 2);
+    de 0;
+}
+
+dhanda muji() {
+    report(3);
+    bol(9);
+}

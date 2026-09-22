@@ -1,15 +1,3 @@
-
 dhanda muji() {
-    bol(add(1,2));
-}
-
-dhanda sub(a, b) {
-    de a - b;
-}
-
-dhanda add(a, b) {
-    dhanda sub(a,b,c){
-        de a + b - c;
-    }
-    de sub(a, b, 0);
+    bol(1);
 }

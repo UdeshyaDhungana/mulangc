@@ -20,8 +20,7 @@ pub struct Program {
 #[derive(Clone, Debug)]
 pub struct Identifier {
     pub name: String,
-    // Populated during semantic analysis
-    pub id: Option<String>,
+    pub node_id: String,
     pub span: Span,
 }
 

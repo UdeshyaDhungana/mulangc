@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 
-use strum_macros::EnumString;
-
 use crate::{
     diagnostics::{Diagnostic, Span},
     syntax::{
         AssignmentTarget, BinaryOperator, Block, Conditional, Else, Expression,
         ExpressionKind::{self},
         Program, Statement, StatementKind, UnaryOperator,
+        sema::{Counter, Resolution},
     },
 };
 
@@ -23,18 +22,6 @@ const SLOT_SIZE: usize = 8;
 /// AArch64 requires `sp` to be 16-byte aligned at every instruction, so a frame
 /// is always rounded up to a multiple of this.
 const STACK_ALIGNMENT: usize = 16;
-
-#[derive(Default)]
-struct Counter {
-    count: i64,
-}
-
-impl Counter {
-    fn next(&mut self) -> i64 {
-        self.count += 1;
-        self.count - 1
-    }
-}
 
 struct Frame {
     size: usize,
@@ -63,17 +50,20 @@ pub struct CodeGenerator {
     // For generating different text sections during codegen
     text_section_stack: Vec<Section>,
     registered_text_sections: Vec<Section>,
+
+    resolution: Resolution,
     // Easy for labelling
     counter: Counter,
 }
 
 impl CodeGenerator {
-    pub fn new(output_file: &str) -> Self {
+    pub fn new(resolution: Resolution, output_file: &str) -> Self {
         Self {
             output_file: output_file.to_string(),
             static_frames: Vec::new(),
             text_section_stack: vec![Default::default()],
             registered_text_sections: Vec::new(),
+            resolution: resolution,
             counter: Counter::default(),
         }
     }
@@ -207,14 +197,6 @@ impl CodeGenerator {
         self.emit_line("ldr x0, [sp], #16");
     }
 
-    /// Push the value of an expression that does not have one. Every
-    /// expression must leave exactly one value on the stack, so the ones that
-    /// produce nothing useful still push a placeholder for their consumer to discard.
-    fn push_void(&mut self) {
-        self.emit_line("mov x0, #0");
-        self.push_from_x0();
-    }
-
     /// Throw away the value on top of the stack, for an expression evaluated
     /// only for its side effect.
     fn pop_and_ignore_void(&mut self) {
@@ -230,7 +212,7 @@ impl CodeGenerator {
         self.emit_preamble();
         // Very much later in our lifetime, we'd witness linking, and include and everythang
         // For now, we just emit the builtins here
-        self.emit_builtin_functions();
+        self.emit_builtin_debug_function();
 
         self.emit_outer_level_line(".p2align 2");
         self.emit_outer_level_line("_main:");
@@ -244,9 +226,16 @@ impl CodeGenerator {
 
         // `muji` is the program's entry point. Sema has already established
         // that it exists, so the call needs no guard here.
-        self.emit_line("bl muji");
+        let Some(entry_node) = &self.resolution.entry_point_node_id else {
+            return Err(Diagnostic::error(
+                Span::new(0, 0),
+                "CODEGEN:: No `muji` dhanda found",
+            ));
+        };
+        self.emit_line(&format!("bl {entry_node}"));
 
         // return 0;
+        // later on we should change this once we get to exit codes
         self.emit_line("mov x0, #0");
         self.pop_static_frame_and_emit_frame_release_assembly();
         self.emit_line("ret");
@@ -297,9 +286,11 @@ impl CodeGenerator {
             }
             StatementKind::Function(definition) => {
                 self.begin_new_text_section();
-                self.emit_outer_level_line(&format!("// dhanda {}", definition.identifier,));
+                self.emit_outer_level_line(
+                    &format!("// dhanda {}", definition.identifier.node_id,),
+                );
                 self.emit_outer_level_line(".p2align 2");
-                self.emit_outer_level_line(&format!("{}:", definition.identifier));
+                self.emit_outer_level_line(&format!("{}:", definition.identifier.node_id));
 
                 // Save the frame pointer so later, it can be used to retrieve arguments
                 self.emit_line("mov x9, sp");
@@ -601,70 +592,37 @@ impl CodeGenerator {
                 }
             }
             ExpressionKind::Call { callee, arguments } => {
-                // TODO: MOVE BUILTIN FUNCTIONS AS A SEPARATE LIBRARY
-                // FUNCTION RATHER THAN A BUILTIN FUNCTION
-                // THERE MUST BE NO BUILTIN FUNCTIONS
-                #[derive(Debug, PartialEq, EnumString)]
-                #[strum(serialize_all = "snake_case")]
-                enum BuiltinFunctions {
-                    Bol,
-                    Abs,
-                }
-
-                // Match against the builtin functions first
-                let Ok(builtin) = callee.name.parse::<BuiltinFunctions>() else {
-                    // Stack arguments
-                    for argument in arguments.iter().skip(8).rev() {
-                        self.emit_expression_evaluation_assembly_and_push_evaluated(argument)?;
-                        self.pop_to_x0();
-                        self.push_from_x0();
-                    }
-
-                    let register_arguments: Vec<&Expression> = arguments.iter().take(8).collect();
-
-                    for argument in register_arguments.iter().rev() {
-                        self.emit_expression_evaluation_assembly_and_push_evaluated(argument)?;
-                    }
-
-                    for idx in 0..register_arguments.len() {
-                        let register = format!("x{idx}");
-                        self.emit_line(&format!("ldr {register}, [sp], #16"));
-                    }
-
-                    self.emit_line(&format!("bl {}", callee.name));
-
-                    // Pop stack arguments
-                    if arguments.len() > 8 {
-                        for _ in 0..(arguments.len() - 8) {
-                            self.pop_and_ignore_void();
-                        }
-                    }
-
-                    // Push the value onto the stack
+                // Stack arguments
+                for argument in arguments.iter().skip(8).rev() {
+                    self.emit_expression_evaluation_assembly_and_push_evaluated(argument)?;
+                    self.pop_to_x0();
                     self.push_from_x0();
-                    return Ok(());
-                };
-
-                match builtin {
-                    BuiltinFunctions::Bol => {
-                        // This only supports one integer argument as of now
-                        if arguments.len() != 1 {
-                            return Err(Diagnostic::error(
-                                expression.span,
-                                "`bol` supports only one integer argument",
-                            ));
-                        }
-
-                        self.emit_expression_evaluation_assembly_and_push_evaluated(&arguments[0])?;
-                        self.pop_to_x0();
-                        self.emit_line("bl _bol");
-                        // `bol` prints and yields nothing, and the call
-                        // has clobbered `x0` anyway.
-                        self.push_void();
-                        Ok(())
-                    }
-                    BuiltinFunctions::Abs => todo!("abs not implemented"),
                 }
+
+                let register_arguments: Vec<&Expression> = arguments.iter().take(8).collect();
+
+                for argument in register_arguments.iter().rev() {
+                    self.emit_expression_evaluation_assembly_and_push_evaluated(argument)?;
+                }
+
+                for idx in 0..register_arguments.len() {
+                    let register = format!("x{idx}");
+                    self.emit_line(&format!("ldr {register}, [sp], #16"));
+                }
+
+                let node_id = self.resolution.resolve(&callee.node_id);
+                self.emit_line(&format!("bl {node_id}",));
+
+                // Pop stack arguments
+                if arguments.len() > 8 {
+                    for _ in 0..(arguments.len() - 8) {
+                        self.pop_and_ignore_void();
+                    }
+                }
+
+                // Push the value onto the stack
+                self.push_from_x0();
+                return Ok(());
             }
         }
     }
@@ -676,13 +634,11 @@ impl CodeGenerator {
         self.emit_newline();
     }
 
-    fn emit_builtin_functions(&mut self) {
-        self.emit_outer_level_line("// BUILTINS");
+    fn emit_builtin_debug_function(&mut self) {
+        self.emit_outer_level_line("// BUILTIN DEBUGGER");
 
-        // bol()
-        // Only supports one integer argument for now
         self.emit_outer_level_line(".p2align 2");
-        self.emit_outer_level_line("_bol:");
+        self.emit_outer_level_line("_debug_bol:");
 
         // Could use a frame here, but not necessary for a builtin
         self.push_static_frame_and_emit_frame_push_assembly(16, true);

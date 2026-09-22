@@ -15,9 +15,9 @@ use std::mem::discriminant;
 
 use crate::diagnostics::{Diagnostic, Span};
 use crate::syntax::ast::*;
+use crate::syntax::sema::Counter;
 use crate::syntax::token::{SpannedToken, Token};
 
-/// Binding strength of an infix operator. Ordered weakest to strongest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Precedence {
     Lowest,
@@ -37,6 +37,7 @@ pub fn parse(tokens: &[SpannedToken]) -> Result<Program, Vec<Diagnostic>> {
         tokens,
         position: 0,
         diagnostics: Vec::new(),
+        counter: Default::default(),
     };
     let statements = parser.parse_program();
 
@@ -57,6 +58,7 @@ struct Parser<'tokens> {
     tokens: &'tokens [SpannedToken],
     position: usize,
     diagnostics: Vec<Diagnostic>,
+    counter: Counter,
 }
 
 impl Parser<'_> {
@@ -81,8 +83,11 @@ impl Parser<'_> {
         statements
     }
 
-    /// Skips ahead to somewhere a new statement can plausibly begin, so that
-    /// one syntax error does not cascade into a page of follow-on complaints.
+    fn get_node_id(&mut self, identifier_name: String) -> String {
+        let next = self.counter.next();
+        format!("{identifier_name}_{next}")
+    }
+
     fn recover_at_statement_boundary(&mut self) {
         while !self.is_at(&Token::EndOfInput) {
             if matches!(self.current_token(), Token::Semicolon) {
@@ -150,17 +155,11 @@ impl Parser<'_> {
         let conditional = self.parse_conditional()?;
 
         Ok(Statement {
-            span: start.joined_with(conditional_end_span(&conditional)),
+            span: start.joined_with(self.conditional_end_span(&conditional)),
             kind: StatementKind::If(conditional),
         })
     }
 
-    /// The `(condition) { … } [natra …]` that follows a `yedi`.
-    ///
-    /// `natra` is decided by one token of lookahead: a `yedi` after it means
-    /// another conditional, and this method recurses; anything else must be the
-    /// closing block. That lookahead is the whole of what used to be a separate
-    /// `nabhae` keyword.
     fn parse_conditional(&mut self) -> Result<Conditional, Diagnostic> {
         self.expect(Token::LeftParenthesis)?;
         let condition = self.parse_expression(Precedence::Lowest)?;
@@ -241,8 +240,6 @@ impl Parser<'_> {
         })
     }
 
-    /// An expression on its own. The trailing `;` is still optional here;
-    /// making it mandatory is the next step.
     fn parse_expression_statement(&mut self) -> Result<Statement, Diagnostic> {
         let expression = self.parse_expression(Precedence::Lowest)?;
         let mut span = expression.span;
@@ -283,7 +280,7 @@ impl Parser<'_> {
     fn parse_expression(&mut self, precedence: Precedence) -> Result<Expression, Diagnostic> {
         let mut left = self.parse_prefix()?;
 
-        while precedence < precedence_of(self.current_token()) {
+        while precedence < self.precedence_of(self.current_token()) {
             left = self.parse_infix(left)?;
         }
         Ok(left)
@@ -344,9 +341,10 @@ impl Parser<'_> {
     }
 
     fn parse_binary(&mut self, left: Expression) -> Result<Expression, Diagnostic> {
-        let operator = binary_operator_of(self.current_token())
+        let operator = self
+            .binary_operator_of(self.current_token())
             .ok_or_else(|| self.error_at_current("expected a binary operator"))?;
-        let precedence = precedence_of(self.current_token());
+        let precedence = self.precedence_of(self.current_token());
         self.advance();
 
         let right = self.parse_expression(precedence)?;
@@ -360,16 +358,13 @@ impl Parser<'_> {
         })
     }
 
-    /// `=` binds loosest of all operators and associates to the right, so the
-    /// value is parsed at the lowest precedence: `a = b = c` groups as
-    /// `a = (b = c)`, and `a = b + c` takes the whole sum.
     fn parse_assignment(&mut self, left: Expression) -> Result<Expression, Diagnostic> {
         self.expect(Token::Assign)?;
-        let target = assignment_target_of(left)?;
+        let target = self.assignment_target_of(left)?;
         let value = self.parse_expression(Precedence::Lowest)?;
 
         Ok(Expression {
-            span: target_span(&target).joined_with(value.span),
+            span: self.target_span(&target).joined_with(value.span),
             kind: ExpressionKind::Assignment {
                 target,
                 value: Box::new(value),
@@ -385,7 +380,7 @@ impl Parser<'_> {
     }
 
     fn parse_call(&mut self, callee: Expression) -> Result<Expression, Diagnostic> {
-        let callee = callee_of(callee)?;
+        let callee = self.callee_of(callee)?;
         self.expect(Token::LeftParenthesis)?;
         let arguments =
             self.parse_comma_separated(&Token::RightParenthesis, Self::parse_expression_at_lowest)?;
@@ -397,11 +392,6 @@ impl Parser<'_> {
         })
     }
 
-    /// `dhanda name(a, b) { … }`.
-    ///
-    /// The name is mandatory. An anonymous definition made sense while a
-    /// function was an expression that something could bind; as a statement it
-    /// would define nothing.
     fn parse_function(&mut self) -> Result<Statement, Diagnostic> {
         let start = self.expect(Token::Function)?;
         let name = self.expect_identifier()?;
@@ -425,9 +415,6 @@ impl Parser<'_> {
         self.parse_expression(Precedence::Lowest)
     }
 
-    /// Reads `item (, item)*` up to but not including `closing`, which the
-    /// caller consumes. Shared by parameters and arguments, which are otherwise
-    /// identical and both permit being empty.
     fn parse_comma_separated<T>(
         &mut self,
         closing: &Token,
@@ -468,7 +455,6 @@ impl Parser<'_> {
         }
     }
 
-    /// Compares token *kinds*, ignoring any value a literal carries.
     fn is_at(&self, expected: &Token) -> bool {
         discriminant(self.current_token()) == discriminant(expected)
     }
@@ -489,14 +475,12 @@ impl Parser<'_> {
         let span = self.current_span();
         self.advance();
         Ok(Identifier {
-            name,
+            name: name.clone(),
             span,
-            id: None,
+            node_id: self.get_node_id(name),
         })
     }
 
-    /// `thoos` and `de` both require a closing `;`, unlike a
-    /// free-standing expression statement where it is optional.
     fn expect_statement_terminator(&mut self) -> Result<Span, Diagnostic> {
         self.expect(Token::Semicolon)
             .map_err(|diagnostic| diagnostic.with_help("this statement must end with `;`"))
@@ -515,84 +499,82 @@ impl Parser<'_> {
             diagnostic
         }
     }
-}
 
-/// Rejects assignment to anything that does not name a place a value can live.
-/// The name being called. Rejects anything else at parse time, so `f(1)(2)` is
-/// a syntax error rather than something the back end has to have an opinion
-/// about.
-fn callee_of(expression: Expression) -> Result<Identifier, Diagnostic> {
-    let span = expression.span;
-    match expression.kind {
-        ExpressionKind::Identifier(name) => Ok(Identifier {
-            name,
-            span,
-            id: None,
-        }),
-        _ => Err(Diagnostic::error(span, "cannot call this expression")
-            .with_help("only a named function can be called")),
-    }
-}
-
-fn assignment_target_of(expression: Expression) -> Result<AssignmentTarget, Diagnostic> {
-    let span = expression.span;
-    match expression.kind {
-        ExpressionKind::Identifier(name) => Ok(AssignmentTarget::Variable(Identifier {
-            name,
-            span,
-            id: None,
-        })),
-        _ => Err(Diagnostic::error(span, "cannot assign to this expression")
-            .with_help("the left of `=` must be a variable")),
-    }
-}
-
-fn target_span(target: &AssignmentTarget) -> Span {
-    match target {
-        AssignmentTarget::Variable(name) => name.span,
-    }
-}
-
-/// The span of the last block in a chain, wherever the chain ends.
-fn conditional_end_span(conditional: &Conditional) -> Span {
-    match conditional.otherwise.as_deref() {
-        None => conditional.then.span,
-        Some(Else::Block(block)) => block.span,
-        Some(Else::If(nested)) => conditional_end_span(nested),
-    }
-}
-
-fn precedence_of(token: &Token) -> Precedence {
-    match token {
-        Token::Assign => Precedence::Assignment,
-        Token::BooleanOr => Precedence::BooleanOr,
-        Token::BooleanAnd => Precedence::BooleanAnd,
-        Token::Equal | Token::NotEqual => Precedence::Equality,
-        Token::Less | Token::LessOrEqual | Token::Greater | Token::GreaterOrEqual => {
-            Precedence::Comparison
+    fn callee_of(&mut self, expression: Expression) -> Result<Identifier, Diagnostic> {
+        let span = expression.span;
+        match expression.kind {
+            ExpressionKind::Identifier(name) => Ok(Identifier {
+                name: name.clone(),
+                span,
+                node_id: self.get_node_id(name),
+            }),
+            _ => Err(Diagnostic::error(span, "cannot call this expression")
+                .with_help("only a named function can be called")),
         }
-        Token::Plus | Token::Minus => Precedence::Sum,
-        Token::Star | Token::Slash | Token::Percent => Precedence::Product,
-        Token::LeftParenthesis => Precedence::Call,
-        _ => Precedence::Lowest,
     }
-}
 
-fn binary_operator_of(token: &Token) -> Option<BinaryOperator> {
-    Some(match token {
-        Token::Plus => BinaryOperator::Add,
-        Token::Minus => BinaryOperator::Subtract,
-        Token::Star => BinaryOperator::Multiply,
-        Token::Slash => BinaryOperator::Divide,
-        Token::Percent => BinaryOperator::Remainder,
-        Token::Equal => BinaryOperator::Equal,
-        Token::NotEqual => BinaryOperator::NotEqual,
-        Token::Less => BinaryOperator::Less,
-        Token::LessOrEqual => BinaryOperator::LessOrEqual,
-        Token::Greater => BinaryOperator::Greater,
-        Token::GreaterOrEqual => BinaryOperator::GreaterOrEqual,
-        Token::BooleanAnd => BinaryOperator::BooleanAnd,
-        Token::BooleanOr => BinaryOperator::BooleanOr,
-        _ => return None,
-    })
+    fn assignment_target_of(
+        &mut self,
+        expression: Expression,
+    ) -> Result<AssignmentTarget, Diagnostic> {
+        let span = expression.span;
+        match expression.kind {
+            ExpressionKind::Identifier(name) => Ok(AssignmentTarget::Variable(Identifier {
+                name: name.clone(),
+                span,
+                node_id: self.get_node_id(name.clone()),
+            })),
+            _ => Err(Diagnostic::error(span, "cannot assign to this expression")
+                .with_help("the left of `=` must be a variable")),
+        }
+    }
+
+    fn target_span(&self, target: &AssignmentTarget) -> Span {
+        match target {
+            AssignmentTarget::Variable(name) => name.span,
+        }
+    }
+
+    fn conditional_end_span(&self, conditional: &Conditional) -> Span {
+        match conditional.otherwise.as_deref() {
+            None => conditional.then.span,
+            Some(Else::Block(block)) => block.span,
+            Some(Else::If(nested)) => self.conditional_end_span(nested),
+        }
+    }
+
+    fn precedence_of(&self, token: &Token) -> Precedence {
+        match token {
+            Token::Assign => Precedence::Assignment,
+            Token::BooleanOr => Precedence::BooleanOr,
+            Token::BooleanAnd => Precedence::BooleanAnd,
+            Token::Equal | Token::NotEqual => Precedence::Equality,
+            Token::Less | Token::LessOrEqual | Token::Greater | Token::GreaterOrEqual => {
+                Precedence::Comparison
+            }
+            Token::Plus | Token::Minus => Precedence::Sum,
+            Token::Star | Token::Slash | Token::Percent => Precedence::Product,
+            Token::LeftParenthesis => Precedence::Call,
+            _ => Precedence::Lowest,
+        }
+    }
+
+    fn binary_operator_of(&self, token: &Token) -> Option<BinaryOperator> {
+        Some(match token {
+            Token::Plus => BinaryOperator::Add,
+            Token::Minus => BinaryOperator::Subtract,
+            Token::Star => BinaryOperator::Multiply,
+            Token::Slash => BinaryOperator::Divide,
+            Token::Percent => BinaryOperator::Remainder,
+            Token::Equal => BinaryOperator::Equal,
+            Token::NotEqual => BinaryOperator::NotEqual,
+            Token::Less => BinaryOperator::Less,
+            Token::LessOrEqual => BinaryOperator::LessOrEqual,
+            Token::Greater => BinaryOperator::Greater,
+            Token::GreaterOrEqual => BinaryOperator::GreaterOrEqual,
+            Token::BooleanAnd => BinaryOperator::BooleanAnd,
+            Token::BooleanOr => BinaryOperator::BooleanOr,
+            _ => return None,
+        })
+    }
 }

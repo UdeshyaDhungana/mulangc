@@ -70,15 +70,15 @@ fn compile_file(path: &str) -> ExitCode {
         }
     };
 
-    let mut sema = Sema::new();
+    let sema = Sema::new();
 
     match sema.analyse(&program) {
         Err(diagnostic) => {
             eprint!("{}", diagnostic.render(&source, path));
             ExitCode::FAILURE
         }
-        Ok(..) => {
-            let mut code_generator = CodeGenerator::new(file_name_without_extension);
+        Ok(resolution) => {
+            let mut code_generator = CodeGenerator::new(resolution, file_name_without_extension);
 
             match code_generator.generate(&program) {
                 Ok(_) => ExitCode::SUCCESS,
