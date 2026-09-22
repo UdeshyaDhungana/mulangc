@@ -1,10 +1,3 @@
-//! Source text in, [`Program`] out.
-//!
-//! [`parse`] is the only entry point anything outside this module needs.
-//! Tokens, operator precedence and the grammar itself stay behind it, which is
-//! what lets the lexer and parser be reworked — for error recovery, for source
-//! maps, for a different surface syntax — without a ripple anywhere else.
-
 pub mod ast;
 mod lexer;
 mod parser;
@@ -18,11 +11,6 @@ pub use ast::{
 
 use crate::diagnostics::Diagnostic;
 
-/// Parses a complete mulang program.
-///
-/// The returned diagnostics describe every problem found in one pass: all
-/// lexical errors, or — when the source tokenises cleanly — every statement
-/// the grammar rejected.
 pub fn parse(source: &str) -> Result<Program, Vec<Diagnostic>> {
     let tokens = lexer::tokenize(source)?;
     parser::parse(&tokens)
@@ -32,9 +20,6 @@ pub fn parse(source: &str) -> Result<Program, Vec<Diagnostic>> {
 mod tests {
     use super::*;
 
-    /// Parses, then prints the result back out as source. Round-tripping is a
-    /// compact way to assert on structure: the printer fully parenthesises
-    /// operators, so precedence and associativity show up in the text.
     fn reprint(source: &str) -> String {
         parse(source)
             .unwrap_or_else(|diagnostics| panic!("should parse: {}", diagnostics[0].message))
@@ -96,8 +81,6 @@ mod tests {
         assert_eq!(reprint("-a * b;"), "((-a) * b);");
     }
 
-    /// Arrays and hash maps are gone, so `[`, `]` and `:` are no longer part of
-    /// the language at all — they fail in the lexer rather than the parser.
     #[test]
     fn rejects_array_and_hash_map_syntax() {
         assert_eq!(first_error("[1, 2];"), "unrecognised character `[`");
@@ -105,7 +88,6 @@ mod tests {
         assert_eq!(first_error("{a: 1};"), "unrecognised character `:`");
     }
 
-    /// A conditional is a statement, so it ends at its `}` with no `;`.
     #[test]
     fn parses_a_conditional_chain_without_a_fallback() {
         assert_eq!(
@@ -122,8 +104,6 @@ mod tests {
         );
     }
 
-    /// `natra yedi` is not a keyword but a nested conditional, so the chain is
-    /// one node per arm rather than a flat list.
     #[test]
     fn a_natra_yedi_arm_nests_rather_than_flattening() {
         let program =
@@ -138,8 +118,6 @@ mod tests {
         assert!(matches!(middle.otherwise.as_deref(), Some(Else::Block(..))));
     }
 
-    /// `natra` takes a conditional or a block and nothing else — mulang requires
-    /// braces on every control-flow body, and this is no exception.
     #[test]
     fn rejects_a_bare_statement_after_natra() {
         assert!(first_error("yedi (a) { 1; } natra bol(2);").starts_with("expected `{`"));
@@ -189,9 +167,6 @@ mod tests {
         );
     }
 
-    /// Control flow sits on the statement side, so the Pratt driver never sees
-    /// a conditional as an operand: this is an if-statement followed by the
-    /// separate expression statement `(2);`, not a call with an `if` callee.
     #[test]
     fn a_conditional_is_never_the_callee_of_a_call() {
         let program = parse("yedi (a) { 1; } (2);").expect("should parse");
@@ -207,8 +182,6 @@ mod tests {
         ));
     }
 
-    /// A loop has no value, so anywhere an expression is required it is now a
-    /// syntax error rather than something the back end has to invent a value for.
     #[test]
     fn rejects_a_loop_where_an_expression_is_expected() {
         assert_eq!(

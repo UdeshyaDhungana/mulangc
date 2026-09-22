@@ -1,16 +1,3 @@
-//! Tokens to a [`Program`], by Pratt parsing.
-//!
-//! Two conventions hold throughout, and everything else follows from them:
-//!
-//! 1. Every `parse_*` method consumes exactly the tokens of the construct it
-//!    names and leaves the cursor on the first token after it. There is no
-//!    "current versus peek" bookkeeping at call sites.
-//! 2. A failed parse is a [`Diagnostic`] carried by `Result`, so a mistake
-//!    deep in an expression cannot be mistaken for a successfully parsed node.
-//!
-//! After an error the parser resynchronises at the next statement boundary and
-//! keeps going, so one run reports every broken statement in the file.
-
 use std::mem::discriminant;
 
 use crate::diagnostics::{Diagnostic, Span};
@@ -72,8 +59,6 @@ impl Parser<'_> {
                 Err(diagnostic) => {
                     self.diagnostics.push(diagnostic);
                     self.recover_at_statement_boundary();
-                    // A parse method that failed without consuming anything
-                    // would otherwise leave us looping on the same token.
                     if self.position == position_before_statement {
                         self.advance();
                     }
@@ -205,8 +190,6 @@ impl Parser<'_> {
         let start = self.expect(Token::For)?;
         self.expect(Token::LeftParenthesis)?;
 
-        // The header's own `;` separators are mandatory, unlike the optional
-        // terminator of a free-standing expression statement.
         let initialiser = match self.current_token() {
             Token::Semicolon => {
                 self.advance();
@@ -436,8 +419,6 @@ impl Parser<'_> {
     /* -------------------------------------------------------------------- cursor */
 
     fn current(&self) -> &SpannedToken {
-        // `tokenize` always terminates the stream with `EndOfInput`, and no
-        // parse method advances past it.
         &self.tokens[self.position.min(self.tokens.len() - 1)]
     }
 

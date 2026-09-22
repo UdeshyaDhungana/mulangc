@@ -10,17 +10,10 @@ use crate::{
     },
 };
 
-/// Stack a thread must have to run the compiler.
-///
-/// Code generation recurses over the AST, so deeply nested source needs room to
-/// walk. Generous rather than measured: it costs address space, not memory.
 pub const REQUIRED_STACK_BYTES: usize = 64 * 1024 * 1024;
 
-/// One 64-bit word per local. This grows once values carry a type tag.
 const SLOT_SIZE: usize = 8;
 
-/// AArch64 requires `sp` to be 16-byte aligned at every instruction, so a frame
-/// is always rounded up to a multiple of this.
 const STACK_ALIGNMENT: usize = 16;
 
 struct Frame {
@@ -119,8 +112,6 @@ impl CodeGenerator {
         self.emit_line("ldp x29, x30, [sp], #16");
     }
 
-    /// Unwind every enclosing block frame and then the function's own, so a
-    /// `de` buried in nested blocks still leaves through one epilogue.
     fn emit_essembly_to_destroy_all_frames_until_first_enclosing_function(&mut self) {
         let frames_to_release = self
             .static_frames
@@ -185,20 +176,14 @@ impl CodeGenerator {
         }
     }
 
-    /// Push `x0` onto the stack.
-    /// A value occupies 16 bytes rather than 8 because `sp` must stay 16-byte
-    /// aligned at every instruction, so the upper half of each slot is padding.
     fn push_from_x0(&mut self) {
         self.emit_line("str x0, [sp, #-16]!");
     }
 
-    /// Pop the top of the stack into `x0`.
     fn pop_to_x0(&mut self) {
         self.emit_line("ldr x0, [sp], #16");
     }
 
-    /// Throw away the value on top of the stack, for an expression evaluated
-    /// only for its side effect.
     fn pop_and_ignore_void(&mut self) {
         self.emit_line("add sp, sp, #16");
     }
@@ -358,8 +343,6 @@ impl CodeGenerator {
                 update,
                 body,
             } => {
-                // Option::iter yields one item or none, so a header without a
-                // declaration collects to an empty Vec and reserves no slot.
                 let initialiser_statements: Vec<Statement> = initialiser
                     .iter()
                     .map(|statement| (**statement).clone())
@@ -382,9 +365,6 @@ impl CodeGenerator {
                 self.emit_line(&format!("cbz x0, {while_end_label}"));
                 self.emit_block_assembly(body)?;
                 self.emit_expression_evaluation_assembly_and_push_evaluated(update)?;
-                // The update runs for its effect, once per iteration. Leaving
-                // its value behind walks the stack downwards for as long as the
-                // loop runs.
                 self.pop_and_ignore_void();
                 self.emit_line(&format!("b {while_condition_label}"));
                 self.emit_outer_level_line(&format!("{while_end_label}:"));
@@ -417,8 +397,6 @@ impl CodeGenerator {
         Ok(())
     }
 
-    /// A block's statements, in a frame of their own so its locals go out of
-    /// scope with it.
     fn emit_block_assembly(&mut self, block: &Block) -> Result<(), Diagnostic> {
         self.push_static_frame_and_emit_frame_push_assembly(
             frame_size_for_statements(&block.statements),
@@ -510,15 +488,12 @@ impl CodeGenerator {
                 self.pop_to_x0();
                 self.emit_line("ldr x1, [sp], #16");
 
-                // x1 holds the left operand, x0 the right.
                 match operator {
                     BinaryOperator::Add => self.emit_line("add x0, x1, x0"),
                     BinaryOperator::Subtract => self.emit_line("sub x0, x1, x0"),
                     BinaryOperator::Multiply => self.emit_line("mul x0, x1, x0"),
                     BinaryOperator::Divide => self.emit_line("sdiv x0, x1, x0"),
                     BinaryOperator::Remainder => {
-                        // AArch64 has no remainder instruction: divide, then
-                        // subtract quotient * right from left.
                         self.emit_line("sdiv x2, x1, x0");
                         self.emit_line("msub x0, x2, x0, x1");
                     }
@@ -656,11 +631,9 @@ impl CodeGenerator {
 
         self.emit_outer_level_line(".section __TEXT,__cstring,cstring_literals");
         self.emit_outer_level_line("Lfmt_integer:");
-        // asciz, not ascii: printf needs the trailing NUL to find the end.
         self.emit_line(".asciz \"%ld\\n\"");
         self.emit_newline();
 
-        // Back to the code section so what follows is not emitted as data.
         self.emit_outer_level_line(".section __TEXT,__text,regular,pure_instructions");
         self.emit_newline();
     }

@@ -494,24 +494,18 @@ mod tests {
     use super::*;
     use crate::syntax::parse;
 
-    /// Every test source carries a `muji` function, since its absence is
-    /// itself one of the things sema checks. `main_only` is the exception.
     fn analyse(source: &str) -> Result<Resolution, Diagnostic> {
         let program = parse(source)
             .unwrap_or_else(|diagnostics| panic!("should parse: {}", diagnostics[0].message));
         Sema::new().analyse(&program)
     }
 
-    /// Asserts the program is semantically valid.
     fn accepts(source: &str) {
         if let Err(diagnostic) = analyse(source) {
             panic!("should analyse cleanly, but got: {}", diagnostic.message);
         }
     }
 
-    /// Asserts the program is rejected, and that the message mentions
-    /// `expected_fragment`. Matching a fragment rather than the whole string
-    /// keeps the `SEMA:: ` prefix and the exact wording free to change.
     fn rejects(source: &str, expected_fragment: &str) {
         let message = analyse(source)
             .expect_err("should be rejected")
@@ -536,8 +530,6 @@ mod tests {
         accepts("dhanda muji() { thoos x = 1; x; }");
     }
 
-    /// A top-level `thoos` is one of the two things the global scope accepts,
-    /// and a function body can still read it.
     #[test]
     fn a_top_level_variable_is_visible_inside_a_function() {
         accepts("thoos g = 1; dhanda muji() { g; }");
@@ -553,14 +545,11 @@ mod tests {
         accepts("dhanda add(a, b) { de 1; } dhanda muji() { add(1, 2); }");
     }
 
-    /// A function's own name is in scope inside its body.
     #[test]
     fn a_function_may_call_itself() {
         accepts("dhanda muji() { } dhanda fac(n) { de fac(1); }");
     }
 
-    /// Top-level signatures are collected before any body is checked, so a
-    /// call may name a function defined further down the file.
     #[test]
     fn a_function_may_call_one_defined_later() {
         accepts("dhanda muji() { } dhanda a() { de b(); } dhanda b() { de 1; }");
@@ -575,14 +564,11 @@ mod tests {
         );
     }
 
-    /// `muji` itself is defined before everything it calls, which is the
-    /// ordering every fixture relies on.
     #[test]
     fn main_may_call_a_function_defined_below_it() {
         accepts("dhanda muji() { bol(later()); } dhanda later() { de 1; }");
     }
 
-    /// Collecting signatures early must not skip the arity check.
     #[test]
     fn a_forward_call_still_has_its_arity_checked() {
         rejects(
@@ -591,14 +577,11 @@ mod tests {
         );
     }
 
-    /// A nested `dhanda` defined before the call that uses it.
     #[test]
     fn a_nested_function_called_after_its_definition() {
         accepts("dhanda muji() { dhanda inner() { de 1; } bol(inner()); }");
     }
 
-    /// Only the global scope collects signatures ahead of time, so a nested
-    /// `dhanda` stays order-dependent like any other statement.
     #[test]
     fn a_nested_function_called_before_its_definition() {
         rejects(
@@ -607,8 +590,6 @@ mod tests {
         );
     }
 
-    /// Follows from the same rule: the first body is checked before the
-    /// second name exists.
     #[test]
     fn two_nested_functions_cannot_call_each_other() {
         rejects(
@@ -617,14 +598,11 @@ mod tests {
         );
     }
 
-    /// A nested `dhanda` can still reach a top-level one defined below it,
-    /// because that name was collected in the global sweep.
     #[test]
     fn a_nested_function_may_call_a_later_top_level_function() {
         accepts("dhanda muji() { dhanda inner() { de outer(); } } dhanda outer() { de 1; }");
     }
 
-    /// The global scope has to stay reachable from inside a function body.
     #[test]
     fn a_builtin_is_callable_from_inside_a_function() {
         accepts("dhanda muji() { bol(1); }");
@@ -635,7 +613,6 @@ mod tests {
         accepts("dhanda muji() { thoos x = 1; yedi (1) { thoos x = 2; } }");
     }
 
-    /// `dhanda` nests.
     #[test]
     fn a_function_defined_inside_another_function() {
         accepts("dhanda muji() { } dhanda outer() { dhanda inner() { de 1; } de 1; }");
@@ -753,8 +730,6 @@ mod tests {
         rejects("dhanda muji() { thoos x = 1; x(); }", "not a function");
     }
 
-    /// The global scope holds definitions and nothing else, so everything
-    /// executable has to sit inside a `dhanda`.
     #[test]
     fn only_definitions_at_the_top_level() {
         rejects("dhanda muji() { } bol(1);", "global scope");
@@ -772,15 +747,11 @@ mod tests {
         rejects("dhanda muji() { later; thoos later = 1; }", "later");
     }
 
-    /// A `de` outside a `dhanda` is now caught one step earlier, by the rule
-    /// that the global scope holds only definitions — there is nowhere left
-    /// for a bare `de` to sit.
     #[test]
     fn a_return_outside_any_function() {
         rejects("dhanda muji() { } de 1;", "global scope");
     }
 
-    /// The `fanfani` header owns the loop variable, which dies with the loop.
     #[test]
     fn a_for_loop_variable_does_not_outlive_the_loop() {
         rejects(

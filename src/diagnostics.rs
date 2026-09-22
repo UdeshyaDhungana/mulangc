@@ -1,15 +1,5 @@
-//! Source locations and the error report they turn into.
-//!
-//! Every failure in the toolchain — a stray character, a missing brace, a
-//! division by zero at run time — is reported as a [`Diagnostic`]: a message
-//! plus the [`Span`] of source text it blames. Callers only ever hand a
-//! diagnostic back the original source text and get a finished report;
-//! resolving byte offsets to line/column, extracting the offending line and
-//! drawing the underline all stay in here.
-
 use std::fmt::Write as _;
 
-/// A half-open range of byte offsets into the source text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
     pub start: usize,
@@ -21,8 +11,6 @@ impl Span {
         Self { start, end }
     }
 
-    /// The smallest span covering both operands, used to give a composite node
-    /// (a binary expression, a block) the extent of everything it contains.
     pub fn joined_with(self, other: Span) -> Self {
         Self::new(self.start.min(other.start), self.end.max(other.end))
     }
@@ -33,8 +21,6 @@ pub struct Diagnostic {
     pub message: String,
     pub span: Span,
     pub help: Option<String>,
-    /// Set when the input simply ran out mid-construct. The REPL reads this to
-    /// decide between asking for a continuation line and reporting an error.
     pub is_caused_by_end_of_input: bool,
 }
 
@@ -58,10 +44,6 @@ impl Diagnostic {
         self
     }
 
-    /// Renders the diagnostic against the source it was produced from.
-    ///
-    /// `origin` labels where the source came from — a file path, or something
-    /// like `<stdin>` for text that was never on disk.
     pub fn render(&self, source: &str, origin: &str) -> String {
         let location = SourceLocation::of(source, self.span.start);
         let gutter_width = location.line_number.to_string().len();
@@ -93,9 +75,6 @@ impl Diagnostic {
         report
     }
 
-    /// How many carets to draw, in characters. A span that runs past the end of
-    /// its first line is trimmed there so the underline stays under the text it
-    /// was drawn beneath.
     fn underline_width(&self, source: &str, location: &SourceLocation<'_>) -> usize {
         let visible_end = self
             .span
@@ -106,7 +85,6 @@ impl Diagnostic {
     }
 }
 
-/// Renders every diagnostic in order, separated by a blank line.
 pub fn render_all(diagnostics: &[Diagnostic], source: &str, origin: &str) -> String {
     diagnostics
         .iter()
@@ -124,7 +102,6 @@ struct SourceLocation<'source> {
 
 impl<'source> SourceLocation<'source> {
     fn of(source: &'source str, offset: usize) -> Self {
-        // A span pointing at end-of-input sits one past the last byte.
         let offset = offset.min(source.len());
         let line_start_offset = source[..offset].rfind('\n').map_or(0, |index| index + 1);
         let line_end_offset = source[offset..]

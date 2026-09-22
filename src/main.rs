@@ -1,5 +1,3 @@
-//! `mulang program.muji` — compile a program to macOS ARM64 assembly.
-
 use std::io;
 use std::path::Path;
 use std::process::ExitCode;
@@ -21,8 +19,6 @@ fn main() -> ExitCode {
         }
     };
 
-    // The main thread's stack is not ours to size, so code generation gets one
-    // that is.
     thread::Builder::new()
         .stack_size(REQUIRED_STACK_BYTES)
         .spawn(work)

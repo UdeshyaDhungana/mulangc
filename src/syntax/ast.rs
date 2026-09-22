@@ -1,13 +1,3 @@
-//! The shape of a parsed mulang program.
-//!
-//! Every node carries the [`Span`] it was parsed from, so a back end — the
-//! interpreter today, a code generator later — can blame precise source text
-//! for anything it rejects.
-//!
-//! [`Display`] writes any node back out as mulang source. That keeps the
-//! printing rules in one place and gives parser tests an exact, readable
-//! assertion target.
-
 use std::fmt;
 
 use crate::diagnostics::Span;
@@ -32,24 +22,15 @@ pub struct Statement {
 
 #[derive(Clone, Debug)]
 pub enum StatementKind {
-    /// `thoos name = value;`
     Declaration {
         identifier: Identifier,
         value: Expression,
     },
-    /// `de value;`
     Return(Expression),
-    /// An expression evaluated for its value, its effect, or both.
     Expression(Expression),
 
-    /// `dhanda name(…) { … }`.
-    ///
-    /// A definition is a statement rather than an expression because the
-    /// statement form is the only thing that names it, and a name is the only
-    /// way to reach a function without closures.
     Function(FunctionDefinition),
 
-    /// `yedi (…) { … }`, with any `natra` chain hanging off [`Conditional`].
     If(Conditional),
     While {
         condition: Box<Expression>,
@@ -90,27 +71,16 @@ pub enum ExpressionKind {
         left: Box<Expression>,
         right: Box<Expression>,
     },
-    /// `target = value`, where `target` was validated at parse time.
     Assignment {
         target: AssignmentTarget,
         value: Box<Expression>,
     },
-    /// `name(arguments)`.
-    ///
-    /// The callee is a name, not an arbitrary expression. Without closures or
-    /// function values there is nothing else a call could be applied to, and
-    /// restricting it here means the back end never has to ask what `f(1)(2)`
-    /// would mean — same reasoning as [`AssignmentTarget`].
     Call {
         callee: Identifier,
         arguments: Vec<Expression>,
     },
 }
 
-/// `dhanda name(parameters) { body }`.
-///
-/// Owned outright rather than shared behind an `Rc`: that indirection existed
-/// so building a closure could be a refcount bump, and mulang has no closures.
 #[derive(Clone, Debug)]
 pub struct FunctionDefinition {
     pub identifier: Identifier,
@@ -118,12 +88,6 @@ pub struct FunctionDefinition {
     pub body: Block,
 }
 
-/// `yedi (condition) { then } [natra …]`.
-///
-/// The chain is recursive rather than a flat list of branches: a `natra yedi`
-/// arm is one of these again in the `otherwise` slot. That is what removes the
-/// need for a separate `nabhae` keyword, and it leaves no empty-chain state to
-/// guard against.
 #[derive(Clone, Debug)]
 pub struct Conditional {
     pub condition: Expression,
@@ -131,16 +95,12 @@ pub struct Conditional {
     pub otherwise: Option<Box<Else>>,
 }
 
-/// What may follow `natra`: the final block, or another conditional.
 #[derive(Clone, Debug)]
 pub enum Else {
     Block(Block),
     If(Conditional),
 }
 
-/// The left side of an assignment. Restricting this to the one form that can
-/// actually name a storage location means the interpreter never has to ask
-/// whether `2 + 2 = 5` is meaningful.
 #[derive(Clone, Debug)]
 pub enum AssignmentTarget {
     Variable(Identifier),
@@ -228,8 +188,6 @@ impl fmt::Display for Expression {
     }
 }
 
-/// Nested constructs need to know how far in they sit, which `Display` alone
-/// cannot carry. These functions thread that depth through.
 fn write_statements(
     formatter: &mut fmt::Formatter<'_>,
     statements: &[Statement],
@@ -267,8 +225,6 @@ fn write_statement(
             formatter.write_str(";")
         }
 
-        // A block-bodied statement ends at its `}`; no `;` follows it, and
-        // `write_statements` supplies the newline.
         StatementKind::Function(definition) => {
             write!(formatter, "dhanda {}(", definition.identifier)?;
             write_separated(
@@ -311,9 +267,6 @@ fn write_statement(
     }
 }
 
-/// The `(condition) { … } [natra …]` that follows a `yedi`. Recursive, so a
-/// `natra yedi` arm prints by the very same path as the `yedi` that opened the
-/// chain.
 fn write_conditional(
     formatter: &mut fmt::Formatter<'_>,
     conditional: &Conditional,

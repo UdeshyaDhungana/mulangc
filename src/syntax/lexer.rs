@@ -1,14 +1,6 @@
-//! Source text to tokens.
-//!
-//! [`tokenize`] is the whole interface: characters in, a token stream out, or
-//! every lexical problem the source contains. Scanning does not stop at the
-//! first bad character, so a file with three stray symbols reports three errors
-//! instead of three compile-and-fix cycles.
-
 use crate::diagnostics::{Diagnostic, Span};
 use crate::syntax::token::{SpannedToken, Token, keyword_or_identifier};
 
-/// Scans `source` into a token stream terminated by [`Token::EndOfInput`].
 pub fn tokenize(source: &str) -> Result<Vec<SpannedToken>, Vec<Diagnostic>> {
     let mut lexer = Lexer {
         source,
@@ -86,21 +78,13 @@ impl<'source> Lexer<'source> {
         }
     }
 
-    /// Consumes whitespace and `// …` comments until real content is next.
-    ///
-    /// Comments never become tokens, so the parser has no idea they exist. A
-    /// line comment cannot be unterminated — end of input ends it just as a
-    /// newline does — so there is nothing here to diagnose.
     fn skip_ignored_text(&mut self) {
         loop {
             match self.current() {
                 Some(character) if character.is_whitespace() => {
                     self.advance();
                 }
-                // Two characters of lookahead, because a lone `/` is division.
                 Some('/') if self.source[self.offset..].starts_with("//") => {
-                    // Stop *before* the newline and let the whitespace arm take
-                    // it on the next turn of the loop.
                     self.advance_while(|character| character != '\n');
                 }
                 _ => return,
@@ -108,11 +92,6 @@ impl<'source> Lexer<'source> {
         }
     }
 
-    /// Reads an integer.
-    ///
-    /// A trailing `.` and the digits after it are consumed even though mulang
-    /// has no decimals, so `1.5` is reported once as the decimal it was meant
-    /// to be, rather than splitting into `1`, an unrecognised `.`, and `5`.
     fn scan_number(&mut self, start: usize) {
         self.advance_while(|character| character.is_ascii_digit());
 
@@ -142,8 +121,6 @@ impl<'source> Lexer<'source> {
         self.push(keyword_or_identifier(word), start);
     }
 
-    /// Emits `two_character` when `expected_second` follows, `one_character`
-    /// otherwise. This is the `<` versus `<=` decision, shared by four operators.
     fn push_one_or_two_character_token(
         &mut self,
         one_character: Token,

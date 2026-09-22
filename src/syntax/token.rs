@@ -1,10 +1,3 @@
-//! The lexical vocabulary of mulang.
-//!
-//! Token variants carry conventional English names; the muji spelling of each
-//! keyword lives in exactly two places in this file — [`keyword_or_identifier`]
-//! and the [`Display`] impl — so the rest of the toolchain never has to know
-//! how a construct is spelled on the page.
-
 use std::fmt;
 
 use crate::diagnostics::Span;
@@ -51,15 +44,12 @@ pub enum Token {
     EndOfInput,
 }
 
-/// A token together with the stretch of source it was read from.
 #[derive(Clone, Debug)]
 pub struct SpannedToken {
     pub token: Token,
     pub span: Span,
 }
 
-/// Classifies a word the lexer has just read. Reserved words become their own
-/// token; anything else is a name the program chose.
 pub fn keyword_or_identifier(word: &str) -> Token {
     match word {
         "thoos" => Token::Declare,
@@ -78,9 +68,6 @@ pub fn keyword_or_identifier(word: &str) -> Token {
 }
 
 impl Token {
-    /// A noun phrase naming this token in an error message, e.g. `expected
-    /// {expected}, found {found}`. Literals describe their category rather than
-    /// their value, which reads better on the "expected" side of that sentence.
     pub fn describe(&self) -> String {
         match self {
             Token::Identifier(_) => "an identifier".to_owned(),
@@ -90,8 +77,6 @@ impl Token {
         }
     }
 
-    /// The same as [`describe`](Token::describe), except that literals show the
-    /// value that was actually found. Used on the "found" side of the message.
     pub fn describe_as_found(&self) -> String {
         match self {
             Token::Identifier(name) => format!("`{name}`"),
@@ -102,7 +87,6 @@ impl Token {
 }
 
 impl fmt::Display for Token {
-    /// Writes the token back out as mulang source text.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let spelling = match self {
             Token::Identifier(name) => return formatter.write_str(name),
