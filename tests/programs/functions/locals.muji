@@ -16,6 +16,8 @@ dhanda mutate(n) {
     de n;
 }
 
-bol(compute(1, 2));
-bol(compute(4, 5));
-bol(mutate(5));
+dhanda muji() {
+    bol(compute(1, 2));
+    bol(compute(4, 5));
+    bol(mutate(5));
+}

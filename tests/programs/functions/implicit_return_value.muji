@@ -11,8 +11,10 @@ dhanda prints_only(a) {
     bol(a);
 }
 
-bol(nothing());
-bol(prints_only(3));
+dhanda muji() {
+    bol(nothing());
+    bol(prints_only(3));
 
-thoos t = nothing();
-bol(t + 1);
+    thoos t = nothing();
+    bol(t + 1);
+}

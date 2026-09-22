@@ -29,8 +29,10 @@ dhanda after_while(n) {
     bol(i);
 }
 
-bol(only_positive(5));
-bol(only_positive(-5));
-bol(first_match(3));
-bol(first_match(50));
-bol(after_while(4));
+dhanda muji() {
+    bol(only_positive(5));
+    bol(only_positive(-5));
+    bol(first_match(3));
+    bol(first_match(50));
+    bol(after_while(4));
+}

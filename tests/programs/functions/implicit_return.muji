@@ -17,7 +17,9 @@ dhanda caller(n) {
     de n * 10;
 }
 
-shout(7);
-shout_twice(8);
-bol(caller(1));
-bol(99);
+dhanda muji() {
+    shout(7);
+    shout_twice(8);
+    bol(caller(1));
+    bol(99);
+}

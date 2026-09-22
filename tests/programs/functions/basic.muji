@@ -9,11 +9,13 @@ dhanda one() {
     de 1;
 }
 
-bol(add(2, 3));
-bol(add(add(1, 2), 4));
-bol(one());
-bol(add(one(), one()));
+dhanda muji() {
+    bol(add(2, 3));
+    bol(add(add(1, 2), 4));
+    bol(one());
+    bol(add(one(), one()));
 
-thoos t = add(10, 20);
-bol(t);
-bol(t * 2);
+    thoos t = add(10, 20);
+    bol(t);
+    bol(t * 2);
+}

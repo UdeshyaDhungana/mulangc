@@ -1,11 +1,13 @@
 // jabasamma accumulating 0 + 1 + 2 + 3 + 4.
 
-thoos i = 0;
-thoos sum = 0;
+dhanda muji() {
+    thoos i = 0;
+    thoos sum = 0;
 
-jabasamma (i < 5) {
-    sum = sum + i;
-    i = i + 1;
+    jabasamma (i < 5) {
+        sum = sum + i;
+        i = i + 1;
+    }
+
+    bol(sum);
 }
-
-bol(sum);

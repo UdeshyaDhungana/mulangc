@@ -1,12 +1,14 @@
 // The six relational operators, equality, and boolean literals.
 // Booleans print as 1 and 0 because bol takes a raw integer.
 
-bol(1 < 2);
-bol(2 < 1);
-bol(2 <= 2);
-bol(3 > 2);
-bol(2 >= 3);
-bol(2 == 2);
-bol(2 != 2);
-bol(ho);
-bol(haina);
+dhanda muji() {
+    bol(1 < 2);
+    bol(2 < 1);
+    bol(2 <= 2);
+    bol(3 > 2);
+    bol(2 >= 3);
+    bol(2 == 2);
+    bol(2 != 2);
+    bol(ho);
+    bol(haina);
+}

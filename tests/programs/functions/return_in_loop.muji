@@ -21,7 +21,9 @@ dhanda find_root(target) {
     de -1;
 }
 
-bol(first_over(5));
-bol(first_over(0));
-bol(find_root(49));
-bol(find_root(50));
+dhanda muji() {
+    bol(first_over(5));
+    bol(first_over(0));
+    bol(find_root(49));
+    bol(find_root(50));
+}

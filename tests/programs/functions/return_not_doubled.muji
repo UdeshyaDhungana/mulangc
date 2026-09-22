@@ -19,7 +19,9 @@ dhanda returns_immediately() {
     de 42;
 }
 
-bol(both_arms(1));
-bol(both_arms(-1));
-bol(ends_with_de(5));
-bol(returns_immediately());
+dhanda muji() {
+    bol(both_arms(1));
+    bol(both_arms(-1));
+    bol(ends_with_de(5));
+    bol(returns_immediately());
+}

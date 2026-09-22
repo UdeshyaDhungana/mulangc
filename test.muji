@@ -1,10 +1,15 @@
-// Two failures. Every line below passes on its own; only the whole file hangs.
 
 dhanda muji() {
+    bol(add(1,2));
 }
 
-dhanda idd(x, x) {
-    de 3;
+dhanda sub(a, b) {
+    de a - b;
 }
 
-bol(idd(1,2,3));
+dhanda add(a, b) {
+    dhanda sub(a,b,c){
+        de a + b - c;
+    }
+    de sub(a, b, 0);
+}

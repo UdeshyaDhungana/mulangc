@@ -1,10 +1,12 @@
 // fanfani accumulating 0 + 1 + 2 + 3 + 4, with the loop variable
 // declared in the header.
 
-thoos t = 0;
+dhanda muji() {
+    thoos t = 0;
 
-fanfani (thoos i = 0; i < 5; i = i + 1) {
-    t = t + i;
+    fanfani (thoos i = 0; i < 5; i = i + 1) {
+        t = t + i;
+    }
+
+    bol(t);
 }
-
-bol(t);

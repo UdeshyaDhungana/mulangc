@@ -22,9 +22,11 @@ dhanda deep(n) {
     de 0;
 }
 
-bol(sign(7));
-bol(sign(-7));
-bol(sign(0));
-bol(deep(50));
-bol(deep(5));
-bol(deep(-5));
+dhanda muji() {
+    bol(sign(7));
+    bol(sign(-7));
+    bol(sign(0));
+    bol(deep(50));
+    bol(deep(5));
+    bol(deep(-5));
+}

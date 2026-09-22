@@ -6,34 +6,36 @@
 // positive offsets from the innermost x29, reading `a` from inside the block
 // picked up the saved x29/x30 pair instead — printing 4294967297.
 
-thoos a = 7;
+dhanda muji() {
+    thoos a = 7;
 
-a + 1;
-a;
-a == 7;
+    a + 1;
+    a;
+    a == 7;
 
-yedi (ho) {
-    bol(a);
+    yedi (ho) {
+        bol(a);
+    }
+
+    // Same leak, once per iteration rather than once.
+    thoos i = 0;
+    jabasamma (i < 3) {
+        i + 100;
+        i = i + 1;
+    }
+    bol(i);
+
+    // An assignment is an expression, so its value can be used.
+    thoos b = 0;
+    thoos c = 0;
+    b = c = 9;
+    bol(b + c);
+
+    // And a loop update that leaks would drift the stack every iteration.
+    thoos t = 0;
+    fanfani (thoos j = 0; j < 4; j = j + 1) {
+        bol(j);
+        t = t + j;
+    }
+    bol(t);
 }
-
-// Same leak, once per iteration rather than once.
-thoos i = 0;
-jabasamma (i < 3) {
-    i + 100;
-    i = i + 1;
-}
-bol(i);
-
-// An assignment is an expression, so its value can be used.
-thoos b = 0;
-thoos c = 0;
-b = c = 9;
-bol(b + c);
-
-// And a loop update that leaks would drift the stack every iteration.
-thoos t = 0;
-fanfani (thoos j = 0; j < 4; j = j + 1) {
-    bol(j);
-    t = t + j;
-}
-bol(t);

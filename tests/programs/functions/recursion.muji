@@ -14,8 +14,10 @@ dhanda fib(n) {
     de fib(n - 1) + fib(n - 2);
 }
 
-bol(fac(0));
-bol(fac(5));
-bol(fib(0));
-bol(fib(1));
-bol(fib(10));
+dhanda muji() {
+    bol(fac(0));
+    bol(fac(5));
+    bol(fib(0));
+    bol(fib(1));
+    bol(fib(10));
+}

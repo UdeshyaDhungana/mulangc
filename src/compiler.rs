@@ -241,6 +241,11 @@ impl CodeGenerator {
         for statement in &program.block.statements {
             self.emit_statement_assembly(statement)?;
         }
+
+        // `muji` is the program's entry point. Sema has already established
+        // that it exists, so the call needs no guard here.
+        self.emit_line("bl muji");
+
         // return 0;
         self.emit_line("mov x0, #0");
         self.pop_static_frame_and_emit_frame_release_assembly();
