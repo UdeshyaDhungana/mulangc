@@ -450,12 +450,6 @@ impl CodeGenerator {
                 self.push_from_x0();
                 Ok(())
             }
-            ExpressionKind::Boolean(bool) => {
-                let bool_int = if *bool { 1 } else { 0 };
-                self.emit_line(&format!("mov x0, #{bool_int}"));
-                self.push_from_x0();
-                Ok(())
-            }
             ExpressionKind::UnaryOperation { operator, operand } => {
                 self.emit_expression_evaluation_assembly_and_push_evaluated(operand)?;
                 match operator {

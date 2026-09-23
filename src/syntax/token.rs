@@ -12,8 +12,6 @@ pub enum Token {
     Return,   // de
     If,       // yedi
     Else,     // natra
-    True,     // ho
-    False,    // haina
     While,    // jabasamma
     For,      // fanfani
 
@@ -57,8 +55,6 @@ pub fn keyword_or_identifier(word: &str) -> Token {
         "de" => Token::Return,
         "yedi" => Token::If,
         "natra" => Token::Else,
-        "ho" => Token::True,
-        "haina" => Token::False,
         "jabasamma" => Token::While,
         "fanfani" => Token::For,
         "ra" => Token::BooleanAnd,
@@ -97,8 +93,6 @@ impl fmt::Display for Token {
             Token::Return => "de",
             Token::If => "yedi",
             Token::Else => "natra",
-            Token::True => "ho",
-            Token::False => "haina",
             Token::While => "jabasamma",
             Token::For => "fanfani",
 

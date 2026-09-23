@@ -28,10 +28,9 @@ thoos x = 43;
 x = x + 1;
 ```
 
-The only values are 64-bit signed integers and booleans, and booleans are just
-`1` and `0`, so the two are freely mixed. A declaration is a statement; an
-assignment is an *expression*, so it has a value and `x = y = 3` works, binding
-to the right.
+The only values are 64-bit signed integers. Comparisons and `ra` / `wa` / `!`
+yield `1` or `0`. A declaration is a statement; an assignment is an
+*expression*, so it has a value and `x = y = 3` works, binding to the right.
 
 ### Functions (Statement)
 
@@ -51,12 +50,9 @@ A function yields its `de` value; `de` always needs an expression after it.
 Falling off the end without reaching a `de` yields `0`. Arguments past the
 eighth are passed on the stack.
 
-### Booleans and conditionals (Statements)
+### Conditionals (Statements)
 
 ```muji
-thoos yes = ho;
-thoos no = haina;
-
 thoos n = 0;
 yedi (n > 0) {
     bol(1);
@@ -68,7 +64,7 @@ yedi (n > 0) {
 ```
 
 `natra` is optional, and an `else if` arm is spelled `natra yedi`. Anything
-non-zero is true; `0` and `haina` are false.
+non-zero is true; `0` is false.
 
 ### Loops (Statements)
 
@@ -185,7 +181,6 @@ Adding a case is two files and no code. **Requires `clang` on your path.**
 
 ## TODOs
 - [x] **Unary** — `-x` → `neg x0, x0`. `!x` → `cmp x0, #0` then `cset x0, eq`.
-- [x] **Booleans** — `ho`/`haina` → `mov x0, #1` / `mov x0, #0`.
 - [x] **Control flow** — a label counter on `Compiler`, `yedi` / `natra yedi` /
       `natra`, `jabasamma`, and `fanfani`.
 - [x] Scoping

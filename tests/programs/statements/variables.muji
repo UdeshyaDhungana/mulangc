@@ -6,7 +6,7 @@ dhanda muji() {
     thoos b = 32;
     bol(a + b);
 
-    yedi (ho) {
+    yedi (1) {
         thoos c = 5;
         bol(a + b + c);
     }

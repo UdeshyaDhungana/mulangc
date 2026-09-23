@@ -62,7 +62,6 @@ pub struct Expression {
 pub enum ExpressionKind {
     Identifier(Identifier),
     Integer(i64),
-    Boolean(bool),
 
     UnaryOperation {
         operator: UnaryOperator,
@@ -311,8 +310,6 @@ fn write_expression(
     match &expression.kind {
         ExpressionKind::Identifier(name) => formatter.write_str(&name.name),
         ExpressionKind::Integer(value) => write!(formatter, "{value}"),
-        ExpressionKind::Boolean(true) => formatter.write_str("ho"),
-        ExpressionKind::Boolean(false) => formatter.write_str("haina"),
 
         ExpressionKind::UnaryOperation { operator, operand } => {
             write!(formatter, "({operator}")?;

@@ -421,7 +421,6 @@ impl Sema {
                 }
             }
             ExpressionKind::Integer(..) => Ok(()),
-            ExpressionKind::Boolean(..) => Ok(()),
             ExpressionKind::UnaryOperation { operand, .. } => self.analyse_expression(operand),
             ExpressionKind::BinaryOperation { left, right, .. } => {
                 self.analyse_expression(left)?;

@@ -291,11 +291,6 @@ impl Parser<'_> {
                 self.advance();
                 ExpressionKind::Integer(value)
             }
-            Token::True | Token::False => {
-                let is_true = self.is_at(&Token::True);
-                self.advance();
-                ExpressionKind::Boolean(is_true)
-            }
 
             Token::Minus | Token::Bang => return self.parse_unary(),
             Token::LeftParenthesis => return self.parse_grouping(),

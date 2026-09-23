@@ -13,7 +13,7 @@ dhanda muji() {
     a;
     a == 7;
 
-    yedi (ho) {
+    yedi (1) {
         bol(a);
     }
 
