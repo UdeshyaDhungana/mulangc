@@ -69,8 +69,8 @@ fn compile_file(path: &str) -> ExitCode {
     let sema = Sema::new();
 
     match sema.analyse(&program) {
-        Err(diagnostic) => {
-            eprint!("{}", diagnostic.render(&source, path));
+        Err(diagnostics) => {
+            eprint!("{}", render_all(&diagnostics, &source, path));
             ExitCode::FAILURE
         }
         Ok(resolution) => {

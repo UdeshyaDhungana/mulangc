@@ -110,6 +110,7 @@ pub struct Sema {
     scopes_stack: Vec<Scope>,
     lookahead_function_definitions: Vec<LookaheadFunctionDefinition>,
     resolution: Resolution,
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl Default for Sema {
@@ -124,6 +125,7 @@ impl Sema {
             scopes_stack: Vec::new(),
             lookahead_function_definitions: Vec::new(),
             resolution: Default::default(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -165,7 +167,7 @@ impl Sema {
         self.scopes_stack.pop();
     }
 
-    pub fn analyse(mut self, program: &Program) -> Result<Resolution, Diagnostic> {
+    pub fn analyse(mut self, program: &Program) -> Result<Resolution, Vec<Diagnostic>> {
         self.scopes_stack.push(Scope::new(ScopeType::Global));
 
         // DEBUG: Just add `bol` builtin so analyzer won't complain
@@ -197,10 +199,11 @@ impl Sema {
                             pending_function_definition.identifier.name == identifier.name
                         },
                     ) {
-                        return Err(Diagnostic::error(
+                        self.diagnostics.push(Diagnostic::error(
                             identifier.span,
                             format!("SEMA:: dhanda `{function_name} has already been defined`"),
                         ));
+                        continue;
                     }
 
                     self.lookahead_function_definitions
@@ -210,7 +213,7 @@ impl Sema {
                         })
                 }
                 _ => {
-                    return Err(Diagnostic::error(
+                    self.diagnostics.push(Diagnostic::error(
                         statement.span,
                         "SEMA:: Only functions and variables definitions are allowed in the global scope",
                     ));
@@ -219,37 +222,46 @@ impl Sema {
         }
 
         // Process the rest of the statements
-        for statement in &program.block.statements {
-            self.analyse_statement(statement)?;
-        }
-
-        let no_muji_found = Diagnostic::error(Span::new(0, 0), "No `muji` dhanda found");
+        self.analyse_statements_collecting_diagnostics(&program.block.statements);
 
         // Check the existence of mukhya jimmewar function `muji`
-        match self.scopes_stack.first() {
-            Some(global_scope) => {
-                if let Some(muji) = global_scope.symbol_table.get("muji") {
-                    match muji {
-                        // Record `muji`'s node id as the entry point
-                        SymbolInfo::Function(muji_symbol_info) => {
-                            self.resolution.entry_point_node_id =
-                                Some(muji_symbol_info.identifier.node_id.clone());
-                            return Ok(self.resolution);
-                        }
-                        SymbolInfo::Variable(..) => return Err(no_muji_found),
-                    }
+        let entry_point_node_id = self.scopes_stack.first().and_then(|global_scope| {
+            match global_scope.symbol_table.get("muji") {
+                Some(SymbolInfo::Function(muji_symbol_info)) => {
+                    Some(muji_symbol_info.identifier.node_id.clone())
                 }
-                return Err(no_muji_found);
+                Some(SymbolInfo::Variable(..)) | None => None,
             }
-            None => return Err(no_muji_found),
+        });
+
+        match entry_point_node_id {
+            // Record `muji`'s node id as the entry point
+            Some(node_id) => self.resolution.entry_point_node_id = Some(node_id),
+            None => self
+                .diagnostics
+                .push(Diagnostic::error(Span::new(0, 0), "No `muji` dhanda found")),
+        }
+
+        if self.diagnostics.is_empty() {
+            Ok(self.resolution)
+        } else {
+            Err(self.diagnostics)
+        }
+    }
+
+    fn analyse_statements_collecting_diagnostics(&mut self, statements: &[Statement]) {
+        for statement in statements {
+            let scope_depth_before_statement = self.scopes_stack.len();
+            if let Err(diagnostic) = self.analyse_statement(statement) {
+                self.diagnostics.push(diagnostic);
+                self.scopes_stack.truncate(scope_depth_before_statement);
+            }
         }
     }
 
     fn analyse_block(&mut self, block: &Block) -> Result<(), Diagnostic> {
         self.push_scope(Scope::new(ScopeType::Block));
-        for statement in &block.statements {
-            self.analyse_statement(statement)?;
-        }
+        self.analyse_statements_collecting_diagnostics(&block.statements);
         self.pop_scope();
         Ok(())
     }
@@ -324,9 +336,7 @@ impl Sema {
                     }
                     self.get_current_scope().add_variable_identifier(parameter);
                 }
-                for statement in &body.statements {
-                    self.analyse_statement(statement)?;
-                }
+                self.analyse_statements_collecting_diagnostics(&body.statements);
                 self.pop_scope();
                 Ok(())
             }
@@ -542,21 +552,23 @@ mod tests {
     use super::*;
     use crate::syntax::parse;
 
-    fn analyse(source: &str) -> Result<Resolution, Diagnostic> {
+    fn analyse(source: &str) -> Result<Resolution, Vec<Diagnostic>> {
         let program = parse(source)
             .unwrap_or_else(|diagnostics| panic!("should parse: {}", diagnostics[0].message));
         Sema::new().analyse(&program)
     }
 
     fn accepts(source: &str) {
-        if let Err(diagnostic) = analyse(source) {
-            panic!("should analyse cleanly, but got: {}", diagnostic.message);
+        if let Err(diagnostics) = analyse(source) {
+            panic!(
+                "should analyse cleanly, but got: {}",
+                diagnostics[0].message
+            );
         }
     }
 
     fn rejects(source: &str, expected_fragment: &str) {
-        let message = analyse(source)
-            .expect_err("should be rejected")
+        let message = analyse(source).expect_err("should be rejected")[0]
             .message
             .clone();
 
@@ -787,5 +799,32 @@ mod tests {
             "dhanda muji() { fanfani (thoos i = 0; 1; i) { 1; } i; }",
             "i",
         );
+    }
+
+    /* --------------------------------------------- more than one diagnostic */
+
+    #[test]
+    fn reports_every_broken_statement_in_one_pass() {
+        let diagnostics = analyse("dhanda muji() { } dhanda a() { de x; } dhanda b() { de y; }")
+            .expect_err("should be rejected");
+
+        assert_eq!(diagnostics.len(), 2);
+        assert!(diagnostics[0].message.contains("x"));
+        assert!(diagnostics[1].message.contains("y"));
+    }
+
+    // A `fanfani` pushes the scope for its parentheses before analysing its
+    // initialiser, so a failing initialiser leaves that scope behind. If it is
+    // not cleaned up, every later statement is analysed one scope too deep and
+    // the next top-level `dhanda` is wrongly reported as not being global.
+    #[test]
+    fn a_failed_for_loop_does_not_leave_its_scope_behind() {
+        let diagnostics = analyse(
+            "dhanda muji() { fanfani (thoos i = missing; 1; i) { 1; } } dhanda later() { de 1; }",
+        )
+        .expect_err("should be rejected");
+
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].message.contains("missing"));
     }
 }
