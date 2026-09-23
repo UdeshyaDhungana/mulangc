@@ -58,7 +58,7 @@ pub struct Expression {
 
 #[derive(Clone, Debug)]
 pub enum ExpressionKind {
-    Identifier(String),
+    Identifier(Identifier),
     Integer(i64),
     Boolean(bool),
 
@@ -303,7 +303,7 @@ fn write_expression(
     depth: usize,
 ) -> fmt::Result {
     match &expression.kind {
-        ExpressionKind::Identifier(name) => formatter.write_str(name),
+        ExpressionKind::Identifier(name) => formatter.write_str(&name.name),
         ExpressionKind::Integer(value) => write!(formatter, "{value}"),
         ExpressionKind::Boolean(true) => formatter.write_str("ho"),
         ExpressionKind::Boolean(false) => formatter.write_str("haina"),

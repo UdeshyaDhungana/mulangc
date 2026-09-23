@@ -423,7 +423,7 @@ impl CodeGenerator {
                         sum_of_frame_sizes += 16 + frame.size;
                     }
 
-                    if frame.offset_map.contains_key(identifier) {
+                    if frame.offset_map.contains_key(&identifier.name) {
                         containing_frame = Some(frame);
                         break;
                     }
@@ -439,7 +439,7 @@ impl CodeGenerator {
                 let local_offset = containing_frame
                     .unwrap()
                     .offset_map
-                    .get(identifier)
+                    .get(&identifier.name)
                     .unwrap();
 
                 let offset = (TryInto::<i64>::try_into(sum_of_frame_sizes).unwrap()) + local_offset;

@@ -275,7 +275,11 @@ impl Parser<'_> {
         let kind = match self.current_token().clone() {
             Token::Identifier(name) => {
                 self.advance();
-                ExpressionKind::Identifier(name)
+                ExpressionKind::Identifier(Identifier {
+                    name: name.clone(),
+                    node_id: self.get_node_id(name),
+                    span,
+                })
             }
             Token::Integer(value) => {
                 self.advance();
@@ -484,10 +488,10 @@ impl Parser<'_> {
     fn callee_of(&mut self, expression: Expression) -> Result<Identifier, Diagnostic> {
         let span = expression.span;
         match expression.kind {
-            ExpressionKind::Identifier(name) => Ok(Identifier {
-                name: name.clone(),
+            ExpressionKind::Identifier(identifier) => Ok(Identifier {
+                name: identifier.name.clone(),
                 span,
-                node_id: self.get_node_id(name),
+                node_id: identifier.node_id,
             }),
             _ => Err(Diagnostic::error(span, "cannot call this expression")
                 .with_help("only a named function can be called")),
@@ -500,10 +504,10 @@ impl Parser<'_> {
     ) -> Result<AssignmentTarget, Diagnostic> {
         let span = expression.span;
         match expression.kind {
-            ExpressionKind::Identifier(name) => Ok(AssignmentTarget::Variable(Identifier {
-                name: name.clone(),
+            ExpressionKind::Identifier(identifier) => Ok(AssignmentTarget::Variable(Identifier {
+                name: identifier.name.clone(),
                 span,
-                node_id: self.get_node_id(name.clone()),
+                node_id: identifier.node_id,
             })),
             _ => Err(Diagnostic::error(span, "cannot assign to this expression")
                 .with_help("the left of `=` must be a variable")),

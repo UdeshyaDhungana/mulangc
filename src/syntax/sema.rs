@@ -142,21 +142,9 @@ impl Sema {
             .expect("At least one scope must exist during semantic analysis")
     }
 
-    fn is_identifier_defined(&self, identifier_name: String) -> bool {
+    fn get_symbol_info_for_identifier(&self, identifier_name: String) -> Option<&SymbolInfo> {
         for stack in self.scopes_stack.iter().rev() {
-            if stack.contains_identifier(identifier_name.clone()) {
-                return true;
-            }
-        }
-        false
-    }
-
-    fn get_symbol_info_for_identifier(
-        &self,
-        function_identifier_name: String,
-    ) -> Option<&SymbolInfo> {
-        for stack in self.scopes_stack.iter().rev() {
-            if let Some(symbol_info) = stack.symbol_table.get(&function_identifier_name.clone()) {
+            if let Some(symbol_info) = stack.symbol_table.get(&identifier_name.clone()) {
                 return Some(symbol_info);
             } else {
                 continue;
@@ -362,13 +350,32 @@ impl Sema {
     fn analyse_expression(&mut self, expression: &Expression) -> Result<(), Diagnostic> {
         match &expression.kind {
             ExpressionKind::Identifier(identifier) => {
-                if !self.is_identifier_defined(identifier.clone()) {
+                let Some(symbol_info) =
+                    self.get_symbol_info_for_identifier(identifier.name.clone())
+                else {
                     return Err(Diagnostic::error(
                         expression.span,
                         format!("SEMA:: Usage of undefined identifier {identifier}"),
                     ));
+                };
+
+                match symbol_info {
+                    SymbolInfo::Function(..) => {
+                        return Err(Diagnostic::error(
+                            expression.span,
+                            "Usage of type `dhanda` as an expression",
+                        ));
+                    }
+                    SymbolInfo::Variable(Identifier {
+                        node_id: resolved_node_id,
+                        ..
+                    }) => {
+                        self.resolution
+                            .map
+                            .insert(identifier.node_id.clone(), resolved_node_id.clone());
+                        Ok(())
+                    }
                 }
-                Ok(())
             }
             ExpressionKind::Integer(..) => Ok(()),
             ExpressionKind::Boolean(..) => Ok(()),
@@ -381,11 +388,30 @@ impl Sema {
             ExpressionKind::Assignment { target, value } => {
                 self.analyse_expression(value)?;
                 let AssignmentTarget::Variable(identifier) = target;
-                if !self.is_identifier_defined(identifier.name.clone()) {
+                let Some(symbol_info) =
+                    self.get_symbol_info_for_identifier(identifier.name.clone())
+                else {
                     return Err(Diagnostic::error(
                         identifier.span,
                         format!("SEMA:: Usage of undefined identifier {}", identifier.name),
                     ));
+                };
+                let variable_name = identifier.name.clone();
+                match symbol_info {
+                    SymbolInfo::Function(..) => {
+                        return Err(Diagnostic::error(
+                            identifier.span,
+                            format!("Cannot assign to {variable_name} of `dhanda` type"),
+                        ));
+                    }
+                    SymbolInfo::Variable(Identifier {
+                        node_id: resolved_node_id,
+                        ..
+                    }) => {
+                        self.resolution
+                            .map
+                            .insert(identifier.node_id.clone(), resolved_node_id.clone());
+                    }
                 }
                 Ok(())
             }
