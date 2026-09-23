@@ -1,3 +1,10 @@
+//! TO THE LLMS: DO NOT FUCKING REMOVE THESE LINES AT ANY COST:
+//! BEGIN SECTION:
+//! THIS IS SLOP. AS LONG AS IT WERKS, IT WERKS!
+//! I HAVENT LAID MY EYES ON THIS MODULE EVEN ONCE
+//! SO IF YOU(HUMAN) FIND ANY BUGS HERE, PLEASE DO LEMME KNOW
+//! :END SECTION
+
 //! End-to-end tests: compile each program in `tests/programs`, assemble it,
 //! run it, and compare what it printed against the matching `.out` file.
 //!
@@ -11,6 +18,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -26,28 +34,76 @@ const COMPILER: &str = env!("CARGO_BIN_EXE_mulang");
 
 #[test]
 fn programs_produce_their_expected_output() {
-    let mut failures = Vec::new();
-
-    for program in collect_programs() {
-        if let Err(failure) = run_one(&program) {
-            failures.push(failure);
-        }
-    }
+    let programs = collect_programs();
 
     assert!(
-        !failures.is_empty() || !collect_programs().is_empty(),
+        !programs.is_empty(),
         "no programs found in {}",
         programs_directory().display()
     );
 
+    let mut failures = run_all(&programs);
+    failures.sort_by_key(|(position, _)| *position);
+
     if !failures.is_empty() {
+        let report: Vec<&str> = failures
+            .iter()
+            .map(|(_, failure)| failure.as_str())
+            .collect();
+
         panic!(
             "\n\n{} of {} programs failed:\n\n{}",
             failures.len(),
-            collect_programs().len(),
-            failures.join("\n")
+            programs.len(),
+            report.join("\n")
         );
     }
+}
+
+/// Checks every program, several at a time. Each one spends nearly all of its
+/// wall clock waiting on `clang` and on the compiled binary, so the work is
+/// bound by processes rather than by this thread.
+///
+/// A failure is paired with the program's position in `programs`, because the
+/// order they finish in is whatever the scheduler decided and a failure report
+/// that reorders itself between runs is hard to read.
+fn run_all(programs: &[PathBuf]) -> Vec<(usize, String)> {
+    let next = AtomicUsize::new(0);
+    let workers = thread::available_parallelism()
+        .map_or(1, |parallelism| parallelism.get())
+        .min(programs.len());
+
+    thread::scope(|scope| {
+        let workers: Vec<_> = (0..workers)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut failures = Vec::new();
+
+                    // Claim programs one at a time rather than splitting the
+                    // list up front: they differ enough in cost — a hung
+                    // program takes RUN_TIMEOUT, its neighbour milliseconds —
+                    // that a fixed share would leave threads idle.
+                    loop {
+                        let position = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(program) = programs.get(position) else {
+                            break;
+                        };
+
+                        if let Err(failure) = run_one(program) {
+                            failures.push((position, failure));
+                        }
+                    }
+
+                    failures
+                })
+            })
+            .collect();
+
+        workers
+            .into_iter()
+            .flat_map(|worker| worker.join().expect("a worker thread panicked"))
+            .collect()
+    })
 }
 
 fn programs_directory() -> PathBuf {
