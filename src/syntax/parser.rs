@@ -163,7 +163,9 @@ impl Parser<'_> {
             None
         };
 
+        let next_id = self.counter.next();
         Ok(Conditional {
+            node_id: format!("yedi_{next_id}"),
             condition,
             then,
             otherwise,
@@ -177,9 +179,11 @@ impl Parser<'_> {
         self.expect(Token::RightParenthesis)?;
         let body = self.parse_block()?;
 
+        let node_id = self.counter.next();
         Ok(Statement {
             span: start.joined_with(body.span),
             kind: StatementKind::While {
+                node_id: format!("jabasamma_{node_id}"),
                 condition: Box::new(condition),
                 body,
             },
@@ -212,6 +216,7 @@ impl Parser<'_> {
         self.expect(Token::RightParenthesis)?;
         let body = self.parse_block()?;
 
+        let next_id = self.counter.next();
         Ok(Statement {
             span: start.joined_with(body.span),
             kind: StatementKind::For {
@@ -219,6 +224,7 @@ impl Parser<'_> {
                 condition: Box::new(condition),
                 update: Box::new(update),
                 body,
+                node_id: format!("jabasamma_{next_id}"),
             },
         })
     }

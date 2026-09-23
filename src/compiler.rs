@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Deref};
 
 use crate::{
     diagnostics::{Diagnostic, Span},
@@ -6,28 +6,39 @@ use crate::{
         AssignmentTarget, BinaryOperator, Block, Conditional, Else, Expression,
         ExpressionKind::{self},
         Program, Statement, StatementKind, UnaryOperator,
-        sema::{Counter, Resolution},
+        sema::Resolution,
     },
 };
 
+type MemoryUnit = usize;
+const MEMORY_UNIT_SCALE: usize = 8;
 pub const REQUIRED_STACK_BYTES: usize = 64 * 1024 * 1024;
-
-const SLOT_SIZE: usize = 8;
-
 const STACK_ALIGNMENT: usize = 16;
 
 struct Frame {
-    size: usize,
-    offset_map: HashMap<String, i64>,
-    // is_functional is true if the frame belongs to a
-    // function and not a block statement
-    is_functional: bool,
+    capacity_in_bytes: usize,
+    offset_map: HashMap<String, i32>,
 }
 
 impl Frame {
-    fn get_next_offset(&self) -> i64 {
-        -i64::try_from(SLOT_SIZE * (1 + self.offset_map.len()))
-            .expect("Failed converting frame offset")
+    fn new(capacity_in_bytes: usize) -> Self {
+        Self {
+            capacity_in_bytes,
+            offset_map: HashMap::new(),
+        }
+    }
+
+    fn get_next_offset(&self) -> i32 {
+        -i32::try_from(MEMORY_UNIT_SCALE * (1 + self.offset_map.len())).expect("Failed to convert ")
+    }
+
+    fn add_node_id_and_offset(&mut self, node_id: String, offset: i32) {
+        // We assume that each entry will take up one memory unit
+        // which is true for the moment, but will break later when structs are introduced
+        if self.capacity_in_bytes < (self.offset_map.len() * MEMORY_UNIT_SCALE) + 1 {
+            panic!("Adding more entries to frame will exceed its capacity");
+        }
+        self.offset_map.insert(node_id, offset);
     }
 }
 
@@ -37,16 +48,15 @@ struct Section {
 }
 
 pub struct CodeGenerator {
-    // Static scope
-    static_frames: Vec<Frame>,
     output_file: String,
+
+    // Static scoping
+    resolution: Resolution,
+    static_frames: Vec<Frame>,
+
     // For generating different text sections during codegen
     text_section_stack: Vec<Section>,
     registered_text_sections: Vec<Section>,
-
-    resolution: Resolution,
-    // Easy for labelling
-    counter: Counter,
 }
 
 impl CodeGenerator {
@@ -57,7 +67,6 @@ impl CodeGenerator {
             text_section_stack: vec![Default::default()],
             registered_text_sections: Vec::new(),
             resolution: resolution,
-            counter: Counter::default(),
         }
     }
 
@@ -74,18 +83,13 @@ impl CodeGenerator {
             .push(self.text_section_stack.pop().unwrap())
     }
 
-    fn push_static_frame_and_emit_frame_push_assembly(
-        &mut self,
-        frame_size: usize,
-        is_functional: bool,
-    ) {
-        self.static_frames.push({
-            Frame {
-                size: frame_size,
-                offset_map: HashMap::new(),
-                is_functional,
-            }
-        });
+    fn get_current_frame(&mut self) -> &mut Frame {
+        self.static_frames.last_mut().unwrap()
+    }
+
+    fn push_frame_and_emit_assembly(&mut self, frame: Frame) {
+        let frame_capacity = frame.capacity_in_bytes;
+        self.static_frames.push(frame);
 
         // Assembly for frame reservation
         // x29 is the frame pointer and x30 is the return address
@@ -95,35 +99,26 @@ impl CodeGenerator {
         // for locals
         self.emit_line("stp x29, x30, [sp, #-16]!");
         self.emit_line("mov x29, sp");
-        if frame_size > 0 {
-            self.emit_line(format!("sub sp, sp, #{frame_size}").as_str());
+
+        if frame_capacity > 0 {
+            self.emit_line(format!("sub sp, sp, #{frame_capacity}").as_str());
         }
         self.emit_newline();
     }
 
-    fn pop_static_frame_and_emit_frame_release_assembly(&mut self) {
-        self.static_frames.pop();
+    fn pop_frame_and_emit_release_assembly(&mut self) {
+        self.pop_frame();
         self.emit_frame_release_assembly();
+    }
+
+    fn pop_frame(&mut self) {
+        self.static_frames.pop();
     }
 
     fn emit_frame_release_assembly(&mut self) {
         self.emit_newline();
         self.emit_line("mov sp, x29");
         self.emit_line("ldp x29, x30, [sp], #16");
-    }
-
-    fn emit_essembly_to_destroy_all_frames_until_first_enclosing_function(&mut self) {
-        let frames_to_release = self
-            .static_frames
-            .iter()
-            .rev()
-            .position(|frame| frame.is_functional)
-            .expect("Expected an enclosing function frame")
-            + 1;
-
-        for _ in 0..frames_to_release {
-            self.emit_frame_release_assembly();
-        }
     }
 
     fn emit_line(&mut self, line: &str) {
@@ -188,41 +183,36 @@ impl CodeGenerator {
         self.emit_line("add sp, sp, #16");
     }
 
-    fn get_topmost_static_frame(&mut self) -> &mut Frame {
-        self.static_frames.last_mut().unwrap()
-    }
-
     pub fn generate(&mut self, program: &Program) -> Result<(), Diagnostic> {
         self.begin_new_text_section();
         self.emit_preamble();
-        // Very much later in our lifetime, we'd witness linking, and include and everythang
-        // For now, we just emit the builtins here
+
+        // DEBUG
         self.emit_builtin_debug_function();
+        // END DEBUG
 
         self.emit_outer_level_line(".p2align 2");
         self.emit_outer_level_line("_main:");
-        self.push_static_frame_and_emit_frame_push_assembly(
-            frame_size_for_statements(&program.block.statements),
-            true,
-        );
+
+        self.push_frame_and_emit_assembly(Frame::new(frame_size_for_block_in_bytes(
+            &program.block,
+        )));
+
         for statement in &program.block.statements {
             self.emit_statement_assembly(statement)?;
         }
 
-        // `muji` is the program's entry point. Sema has already established
-        // that it exists, so the call needs no guard here.
+        // Defense check
         let Some(entry_node) = &self.resolution.entry_point_node_id else {
-            return Err(Diagnostic::error(
-                Span::new(0, 0),
-                "CODEGEN:: No `muji` dhanda found",
-            ));
+            panic!("CODEGEN:: No entry node found");
         };
+
         self.emit_line(&format!("bl {entry_node}"));
 
         // return 0;
         // later on we should change this once we get to exit codes
         self.emit_line("mov x0, #0");
-        self.pop_static_frame_and_emit_frame_release_assembly();
+        self.pop_frame_and_emit_release_assembly();
         self.emit_line("ret");
         self.end_and_register_current_text_section();
         self.write_assembly_file()
@@ -231,41 +221,26 @@ impl CodeGenerator {
     fn emit_statement_assembly(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
         match &statement.kind {
             StatementKind::Declaration { identifier, value } => {
-                if self
-                    .get_topmost_static_frame()
-                    .offset_map
-                    .contains_key(&identifier.name)
-                {
-                    return Err(Diagnostic::error(
-                        identifier.span,
-                        "Redeclaration of variable in the same scope is not allowed",
-                    ));
-                }
+                let next_offset = self.get_current_frame().get_next_offset();
 
-                let next_offset = self.get_topmost_static_frame().get_next_offset();
+                self.get_current_frame()
+                    .add_node_id_and_offset(identifier.node_id.clone(), next_offset);
 
-                self.get_topmost_static_frame()
-                    .offset_map
-                    .insert(identifier.name.clone(), next_offset);
-
-                self.emit_expression_evaluation_assembly_and_push_evaluated(value)?;
+                self.emit_expression_assembly_and_push_to_stack(value)?;
                 self.pop_to_x0();
                 self.emit_line(&format!("str x0, [x29, #{next_offset}]"));
                 self.emit_newline();
                 Ok(())
             }
             StatementKind::Return(return_expression) => {
-                self.emit_expression_evaluation_assembly_and_push_evaluated(return_expression)?;
+                self.emit_expression_assembly_and_push_to_stack(return_expression)?;
                 self.pop_to_x0();
-                // Instead of this, what return should be responsible for
-                // Is walking down the frames stack, and pop all non functional
-                // frames
-                self.emit_essembly_to_destroy_all_frames_until_first_enclosing_function();
+                self.emit_frame_release_assembly();
                 self.emit_line("ret");
                 Ok(())
             }
             StatementKind::Expression(expression) => {
-                self.emit_expression_evaluation_assembly_and_push_evaluated(expression)?;
+                self.emit_expression_assembly_and_push_to_stack(expression)?;
                 self.pop_and_ignore_void();
                 Ok(())
             }
@@ -277,20 +252,23 @@ impl CodeGenerator {
                 self.emit_outer_level_line(".p2align 2");
                 self.emit_outer_level_line(&format!("{}:", definition.identifier.node_id));
 
-                // Save the frame pointer so later, it can be used to retrieve arguments
+                // Save the stack pointer so later, it can be used to retrieve arguments
+                // Callee should use x9 to retrieve stack based arguments
                 self.emit_line("mov x9, sp");
 
-                self.push_static_frame_and_emit_frame_push_assembly(
-                    frame_size_for_statements(&definition.body.statements)
-                        + (definition.parameters.len() * 16),
-                    true,
-                );
+                // TODO: Currently, we assume that each parameter occupies one byte
+                // This assumption won't hold valid when we add structs
+                self.push_frame_and_emit_assembly(Frame::new(
+                    frame_size_for_block_in_bytes(&definition.body)
+                        + translate_memory_units_to_bytes(definition.parameters.len()),
+                ));
 
                 for (idx, parameter) in definition.parameters.iter().enumerate() {
-                    let next_offset = self.get_topmost_static_frame().get_next_offset();
-                    self.get_topmost_static_frame()
-                        .offset_map
-                        .insert(parameter.name.clone(), next_offset);
+                    let next_offset = self.get_current_frame().get_next_offset();
+                    self.get_current_frame()
+                        .add_node_id_and_offset(parameter.node_id.clone(), next_offset);
+
+                    // The first 8 arguments live on x0..x7, the rest live on the stack in increasing order
                     if idx < 8 {
                         let register_name = format!("x{}", idx);
                         self.emit_line(&format!("str {register_name}, [x29, #{next_offset}]"));
@@ -312,27 +290,33 @@ impl CodeGenerator {
                 // Return void if a function doesn't contain a return statement
                 if !has_return {
                     self.emit_line("mov x0, #0");
-                    self.emit_essembly_to_destroy_all_frames_until_first_enclosing_function();
+                    self.pop_frame_and_emit_release_assembly();
                     self.emit_line("ret");
                 }
 
-                self.pop_static_frame_and_emit_frame_release_assembly();
+                self.pop_frame();
                 self.end_and_register_current_text_section();
                 Ok(())
             }
             StatementKind::If(conditional) => self.emit_conditional_assembly(conditional),
-            StatementKind::While { condition, body } => {
-                let while_stmt_number = self.counter.next();
+            StatementKind::While {
+                condition,
+                body,
+                node_id,
+            } => {
                 // `L` marks a label the assembler resolves and then discards,
                 // instead of exporting it into the object file's symbol table.
-                let while_start_label = &format!("Lwhile_{}_start", while_stmt_number);
-                let while_end_label = &format!("Lwhile_{}_end", while_stmt_number);
+                let while_start_label = &format!("L{}_start", node_id);
+                let while_end_label = &format!("L{}_end", node_id);
 
                 self.emit_outer_level_line(&format!("{while_start_label}:"));
-                self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
+
+                self.emit_expression_assembly_and_push_to_stack(condition)?;
                 self.pop_to_x0();
                 self.emit_line(&format!("cbz x0, {while_end_label}"));
+
                 self.emit_block_assembly(body)?;
+
                 self.emit_line(&format!("b {while_start_label}"));
                 self.emit_outer_level_line(&format!("{while_end_label}:"));
                 Ok(())
@@ -342,44 +326,37 @@ impl CodeGenerator {
                 condition,
                 update,
                 body,
+                node_id,
             } => {
-                let initialiser_statements: Vec<Statement> = initialiser
-                    .iter()
-                    .map(|statement| (**statement).clone())
-                    .collect();
-
-                self.push_static_frame_and_emit_frame_push_assembly(
-                    frame_size_for_statements(&initialiser_statements),
-                    false,
-                );
-
-                let for_stmt_counter = self.counter.next();
                 if let Some(initialiser) = initialiser {
                     self.emit_statement_assembly(initialiser)?;
                 }
-                let while_condition_label = format!("Lfor_{}_start", for_stmt_counter);
-                let while_end_label = format!("Lfor_{}_end", for_stmt_counter);
+                let while_condition_label = format!("L{}_start", node_id);
+                let while_end_label = format!("L{}_end", node_id);
+
                 self.emit_outer_level_line(&format!("{while_condition_label}:"));
-                self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
+
+                self.emit_expression_assembly_and_push_to_stack(condition)?;
                 self.pop_to_x0();
                 self.emit_line(&format!("cbz x0, {while_end_label}"));
+
                 self.emit_block_assembly(body)?;
-                self.emit_expression_evaluation_assembly_and_push_evaluated(update)?;
+
+                self.emit_expression_assembly_and_push_to_stack(update)?;
                 self.pop_and_ignore_void();
+
                 self.emit_line(&format!("b {while_condition_label}"));
                 self.emit_outer_level_line(&format!("{while_end_label}:"));
-                self.pop_static_frame_and_emit_frame_release_assembly();
                 Ok(())
             }
         }
     }
 
     fn emit_conditional_assembly(&mut self, conditional: &Conditional) -> Result<(), Diagnostic> {
-        let conditional_number = self.counter.next();
-        let else_label = format!("Lif_{conditional_number}_else");
-        let end_label = format!("Lif_{conditional_number}_end");
+        let else_label = format!("L{}_else", conditional.node_id);
+        let end_label = format!("L{}_end", conditional.node_id);
 
-        self.emit_expression_evaluation_assembly_and_push_evaluated(&conditional.condition)?;
+        self.emit_expression_assembly_and_push_to_stack(&conditional.condition)?;
         self.pop_to_x0();
         self.emit_line(&format!("cbz x0, {else_label}"));
 
@@ -398,51 +375,51 @@ impl CodeGenerator {
     }
 
     fn emit_block_assembly(&mut self, block: &Block) -> Result<(), Diagnostic> {
-        self.push_static_frame_and_emit_frame_push_assembly(
-            frame_size_for_statements(&block.statements),
-            false,
-        );
         for statement in &block.statements {
             self.emit_statement_assembly(statement)?;
         }
-        self.pop_static_frame_and_emit_frame_release_assembly();
         Ok(())
     }
 
     // Generate a sequence of statements to evaluate an expression and put the value on the top of the stack
-    fn emit_expression_evaluation_assembly_and_push_evaluated(
+    fn emit_expression_assembly_and_push_to_stack(
         &mut self,
         expression: &Expression,
     ) -> Result<(), Diagnostic> {
         match &expression.kind {
             ExpressionKind::Identifier(identifier) => {
+                let identifier_name = identifier.name.clone();
+                let resolved_node_id = self
+                    .resolution
+                    .map
+                    .get(&identifier.node_id)
+                    .expect(&format!("Expected {identifier_name} to be resolved"));
+
                 let mut sum_of_frame_sizes = 0;
                 let mut containing_frame: Option<&Frame> = None;
+
                 for (idx, frame) in self.static_frames.iter().rev().enumerate() {
                     if idx != 0 {
-                        sum_of_frame_sizes += 16 + frame.size;
+                        sum_of_frame_sizes += 16 + frame.capacity_in_bytes;
                     }
 
-                    if frame.offset_map.contains_key(&identifier.name) {
+                    if frame.offset_map.contains_key(resolved_node_id) {
                         containing_frame = Some(frame);
                         break;
                     }
                 }
 
                 if containing_frame.is_none() {
-                    return Err(Diagnostic::error(
-                        expression.span,
-                        format!("`{identifier}` is not a valid identifier"),
-                    ));
+                    panic!("CODEGEN:: No frame contains node with id {resolved_node_id}");
                 }
 
                 let local_offset = containing_frame
                     .unwrap()
                     .offset_map
-                    .get(&identifier.name)
+                    .get(resolved_node_id)
                     .unwrap();
 
-                let offset = (TryInto::<i64>::try_into(sum_of_frame_sizes).unwrap()) + local_offset;
+                let offset = (TryInto::<i32>::try_into(sum_of_frame_sizes).unwrap()) + local_offset;
 
                 self.emit_line(&format!("ldr x0, [x29, #{offset}]"));
                 self.push_from_x0();
@@ -461,7 +438,7 @@ impl CodeGenerator {
                 Ok(())
             }
             ExpressionKind::UnaryOperation { operator, operand } => {
-                self.emit_expression_evaluation_assembly_and_push_evaluated(operand)?;
+                self.emit_expression_assembly_and_push_to_stack(operand)?;
                 match operator {
                     UnaryOperator::Negate => {
                         self.pop_to_x0();
@@ -483,8 +460,8 @@ impl CodeGenerator {
                 left,
                 right,
             } => {
-                self.emit_expression_evaluation_assembly_and_push_evaluated(left)?;
-                self.emit_expression_evaluation_assembly_and_push_evaluated(right)?;
+                self.emit_expression_assembly_and_push_to_stack(left)?;
+                self.emit_expression_assembly_and_push_to_stack(right)?;
                 self.pop_to_x0();
                 self.emit_line("ldr x1, [sp], #16");
 
@@ -524,52 +501,57 @@ impl CodeGenerator {
                 Ok(())
             }
             ExpressionKind::Assignment { target, value } => {
-                self.emit_expression_evaluation_assembly_and_push_evaluated(value)?;
-                match target {
-                    AssignmentTarget::Variable(identifier) => {
-                        let mut sum_of_frame_sizes = 0;
-                        let mut containing_frame: Option<&Frame> = None;
-                        for (idx, frame) in self.static_frames.iter().rev().enumerate() {
-                            if idx != 0 {
-                                sum_of_frame_sizes += 16 + frame.size;
-                            }
+                self.emit_expression_assembly_and_push_to_stack(value)?;
 
-                            if frame.offset_map.contains_key(&identifier.name) {
-                                containing_frame = Some(frame);
-                                break;
-                            }
-                        }
+                let AssignmentTarget::Variable(identifier) = target;
+                let identifier_name = identifier.name.clone();
+                let mut sum_of_frame_sizes = 0;
+                let mut containing_frame: Option<&Frame> = None;
+                let resolved_node_id = self
+                    .resolution
+                    .map
+                    .get(&identifier.node_id)
+                    .expect(&format!("Expected {identifier_name} to be resolved"));
 
-                        if containing_frame.is_none() {
-                            return Err(Diagnostic::error(
-                                identifier.span,
-                                format!("variable '{}' not found for assignment", identifier.name),
-                            ));
-                        }
+                for (idx, frame) in self.static_frames.iter().rev().enumerate() {
+                    if idx != 0 {
+                        sum_of_frame_sizes += 16 + frame.capacity_in_bytes;
+                    }
 
-                        let local_offset = containing_frame
-                            .unwrap()
-                            .offset_map
-                            .get(&identifier.name)
-                            .unwrap();
-
-                        let offset =
-                            (TryInto::<i64>::try_into(sum_of_frame_sizes).unwrap()) + local_offset;
-
-                        self.pop_to_x0();
-                        self.emit_line(&format!("str x0, [x29, #{offset}]"));
-                        // An assignment is an expression whose value is the
-                        // value assigned, so `x = y = 3` works and binds to the
-                        // right. `x0` still holds it, so push it back.
-                        self.push_from_x0();
-                        Ok(())
+                    if frame.offset_map.contains_key(resolved_node_id) {
+                        containing_frame = Some(frame);
+                        break;
                     }
                 }
+
+                if containing_frame.is_none() {
+                    return Err(Diagnostic::error(
+                        identifier.span,
+                        format!("variable '{}' not found for assignment", identifier.name),
+                    ));
+                }
+
+                let local_offset = containing_frame
+                    .unwrap()
+                    .offset_map
+                    .get(&identifier.name)
+                    .unwrap();
+
+                let offset = (TryInto::<i64>::try_into(sum_of_frame_sizes).unwrap())
+                    + i64::from(*local_offset);
+
+                self.pop_to_x0();
+                self.emit_line(&format!("str x0, [x29, #{offset}]"));
+                // An assignment is an expression whose value is the
+                // value assigned, so `x = y = 3` works and binds to the
+                // right. `x0` still holds it, so push it back.
+                self.push_from_x0();
+                Ok(())
             }
             ExpressionKind::Call { callee, arguments } => {
                 // Stack arguments
                 for argument in arguments.iter().skip(8).rev() {
-                    self.emit_expression_evaluation_assembly_and_push_evaluated(argument)?;
+                    self.emit_expression_assembly_and_push_to_stack(argument)?;
                     self.pop_to_x0();
                     self.push_from_x0();
                 }
@@ -577,7 +559,7 @@ impl CodeGenerator {
                 let register_arguments: Vec<&Expression> = arguments.iter().take(8).collect();
 
                 for argument in register_arguments.iter().rev() {
-                    self.emit_expression_evaluation_assembly_and_push_evaluated(argument)?;
+                    self.emit_expression_assembly_and_push_to_stack(argument)?;
                 }
 
                 for idx in 0..register_arguments.len() {
@@ -616,7 +598,7 @@ impl CodeGenerator {
         self.emit_outer_level_line("_debug_bol:");
 
         // Could use a frame here, but not necessary for a builtin
-        self.push_static_frame_and_emit_frame_push_assembly(16, true);
+        self.push_frame_and_emit_assembly(Frame::new(0));
 
         // because printf expects arguments on the stack
         self.emit_line("str x0, [sp]");
@@ -624,7 +606,7 @@ impl CodeGenerator {
         self.emit_line("add x0, x0, Lfmt_integer@PAGEOFF");
         self.emit_line("bl _printf");
 
-        self.pop_static_frame_and_emit_frame_release_assembly();
+        self.pop_frame_and_emit_release_assembly();
 
         self.emit_line("ret");
         self.emit_newline();
@@ -656,11 +638,56 @@ impl CodeGenerator {
     }
 }
 
-fn frame_size_for_statements(statements: &[Statement]) -> usize {
-    let local_count = statements
-        .iter()
-        .filter(|statement| matches!(statement.kind, StatementKind::Declaration { .. }))
-        .count();
+fn frame_size_for_block_in_bytes(block: &Block) -> usize {
+    return translate_memory_units_to_bytes(memory_units_occupied_by_block(block));
+}
 
-    (local_count * SLOT_SIZE).div_ceil(STACK_ALIGNMENT) * STACK_ALIGNMENT
+fn translate_memory_units_to_bytes(m: MemoryUnit) -> usize {
+    return (m * MEMORY_UNIT_SCALE).div_ceil(STACK_ALIGNMENT) * STACK_ALIGNMENT;
+}
+
+// memory_units_occupied_by will give the total size of the given block
+// in memory units.
+// It'll walk the tree recursively, ignoring function definitions, and
+fn memory_units_occupied_by_block(block: &Block) -> MemoryUnit {
+    let mut total = 0;
+    for stmt in &block.statements {
+        total += memory_units_occupied_by_statement(stmt);
+    }
+    total
+}
+
+fn memory_units_occupied_by_statement(statement: &Statement) -> MemoryUnit {
+    let mut total: usize = 0;
+    match &statement.kind {
+        StatementKind::Declaration { .. } => {
+            total += 1;
+        }
+        StatementKind::If(conditional) => {
+            total += memory_units_occupied_by_conditional(conditional);
+        }
+        StatementKind::While { body, .. } => total += memory_units_occupied_by_block(body),
+        StatementKind::For {
+            initialiser, body, ..
+        } => {
+            if let Some(initialiser) = initialiser {
+                total += memory_units_occupied_by_statement(initialiser.deref());
+            }
+            total += memory_units_occupied_by_block(body);
+        }
+        _ => {}
+    }
+    total
+}
+
+fn memory_units_occupied_by_conditional(conditional: &Conditional) -> MemoryUnit {
+    let mut total: MemoryUnit = 0;
+    total += memory_units_occupied_by_block(&conditional.then);
+    if let Some(otherwise) = &conditional.otherwise {
+        match otherwise.deref() {
+            Else::Block(block) => total += memory_units_occupied_by_block(block),
+            Else::If(conditional) => total += memory_units_occupied_by_conditional(conditional),
+        }
+    }
+    total
 }

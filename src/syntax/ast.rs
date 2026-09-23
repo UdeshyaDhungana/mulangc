@@ -33,10 +33,12 @@ pub enum StatementKind {
 
     If(Conditional),
     While {
+        node_id: String,
         condition: Box<Expression>,
         body: Block,
     },
     For {
+        node_id: String,
         initialiser: Option<Box<Statement>>,
         condition: Box<Expression>,
         update: Box<Expression>,
@@ -90,6 +92,7 @@ pub struct FunctionDefinition {
 
 #[derive(Clone, Debug)]
 pub struct Conditional {
+    pub node_id: String,
     pub condition: Expression,
     pub then: Block,
     pub otherwise: Option<Box<Else>>,
@@ -240,7 +243,9 @@ fn write_statement(
             formatter.write_str("yedi ")?;
             write_conditional(formatter, conditional, depth)
         }
-        StatementKind::While { condition, body } => {
+        StatementKind::While {
+            condition, body, ..
+        } => {
             formatter.write_str("jabasamma (")?;
             write_expression(formatter, condition, depth)?;
             formatter.write_str(") ")?;
@@ -251,6 +256,7 @@ fn write_statement(
             condition,
             update,
             body,
+            ..
         } => {
             formatter.write_str("fanfani (")?;
             match initialiser {

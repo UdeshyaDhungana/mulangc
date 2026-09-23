@@ -321,7 +321,9 @@ impl Sema {
                 Ok(())
             }
             StatementKind::If(conditional) => self.analyse_conditional(conditional),
-            StatementKind::While { condition, body } => {
+            StatementKind::While {
+                condition, body, ..
+            } => {
                 self.analyse_expression(condition)?;
                 self.analyse_block(body)?;
                 Ok(())
@@ -331,6 +333,7 @@ impl Sema {
                 condition,
                 update,
                 body,
+                ..
             } => {
                 // For's parenthesis get their own scope
                 self.push_scope(Scope::new(ScopeType::Block));
