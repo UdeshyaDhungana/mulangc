@@ -142,6 +142,10 @@ impl Sema {
             .expect("At least one scope must exist during semantic analysis")
     }
 
+    fn in_global_scope(&self) -> bool {
+        self.scopes_stack.len() == 1
+    }
+
     fn get_symbol_info_for_identifier(&self, identifier_name: String) -> Option<&SymbolInfo> {
         for stack in self.scopes_stack.iter().rev() {
             if let Some(symbol_info) = stack.symbol_table.get(&identifier_name.clone()) {
@@ -283,6 +287,12 @@ impl Sema {
                 body,
                 parameters,
             }) => {
+                if !self.in_global_scope() {
+                    return Err(Diagnostic::error(
+                        identifier.span,
+                        format!("SEMA:: `dhanda` can only be declared in the global scope"),
+                    ));
+                }
                 let function_name = identifier.name.clone();
 
                 if self
@@ -616,32 +626,6 @@ mod tests {
     }
 
     #[test]
-    fn a_nested_function_called_after_its_definition() {
-        accepts("dhanda muji() { dhanda inner() { de 1; } bol(inner()); }");
-    }
-
-    #[test]
-    fn a_nested_function_called_before_its_definition() {
-        rejects(
-            "dhanda muji() { bol(inner()); dhanda inner() { de 1; } }",
-            "inner",
-        );
-    }
-
-    #[test]
-    fn two_nested_functions_cannot_call_each_other() {
-        rejects(
-            "dhanda muji() { dhanda a() { de b(); } dhanda b() { de a(); } }",
-            "b",
-        );
-    }
-
-    #[test]
-    fn a_nested_function_may_call_a_later_top_level_function() {
-        accepts("dhanda muji() { dhanda inner() { de outer(); } } dhanda outer() { de 1; }");
-    }
-
-    #[test]
     fn a_builtin_is_callable_from_inside_a_function() {
         accepts("dhanda muji() { bol(1); }");
     }
@@ -651,12 +635,19 @@ mod tests {
         accepts("dhanda muji() { thoos x = 1; yedi (1) { thoos x = 2; } }");
     }
 
-    #[test]
-    fn a_function_defined_inside_another_function() {
-        accepts("dhanda muji() { } dhanda outer() { dhanda inner() { de 1; } de 1; }");
-    }
-
     /* ------------------------------------------------------------ rejected */
+
+    #[test]
+    fn a_dhanda_declared_outside_the_global_scope() {
+        rejects(
+            "dhanda muji() { dhanda inner() { de 1; } }",
+            "can only be declared",
+        );
+        rejects(
+            "dhanda muji() { yedi (1) { dhanda inner() { de 1; } } }",
+            "can only be declared",
+        );
+    }
 
     #[test]
     fn a_program_without_a_main_function() {

@@ -22,6 +22,10 @@ struct Frame {
 
 impl Frame {
     fn new(capacity_in_bytes: usize) -> Self {
+        // arm64 requirement
+        if capacity_in_bytes % 16 != 0 {
+            panic!("Frame size must be a multiple of 16");
+        }
         Self {
             capacity_in_bytes,
             offset_map: HashMap::new(),
@@ -252,9 +256,11 @@ impl CodeGenerator {
                 self.emit_outer_level_line(".p2align 2");
                 self.emit_outer_level_line(&format!("{}:", definition.identifier.node_id));
 
-                // Save the stack pointer so later, it can be used to retrieve arguments
+                // Save the stack pointer so later it can be used to retrieve arguments
                 // Callee should use x9 to retrieve stack based arguments
-                self.emit_line("mov x9, sp");
+                if definition.parameters.len() > 8 {
+                    self.emit_line("mov x9, sp");
+                }
 
                 // TODO: Currently, we assume that each parameter occupies one byte
                 // This assumption won't hold valid when we add structs
@@ -525,16 +531,16 @@ impl CodeGenerator {
                 }
 
                 if containing_frame.is_none() {
-                    return Err(Diagnostic::error(
-                        identifier.span,
-                        format!("variable '{}' not found for assignment", identifier.name),
-                    ));
+                    let msg = format!(
+                        "Expected at least one fraome to contain node id {resolved_node_id}"
+                    );
+                    panic!("Expected at least one fraome to contain node id {msg}")
                 }
 
                 let local_offset = containing_frame
                     .unwrap()
                     .offset_map
-                    .get(&identifier.name)
+                    .get(resolved_node_id)
                     .unwrap();
 
                 let offset = (TryInto::<i64>::try_into(sum_of_frame_sizes).unwrap())
@@ -598,7 +604,7 @@ impl CodeGenerator {
         self.emit_outer_level_line("_debug_bol:");
 
         // Could use a frame here, but not necessary for a builtin
-        self.push_frame_and_emit_assembly(Frame::new(0));
+        self.push_frame_and_emit_assembly(Frame::new(16));
 
         // because printf expects arguments on the stack
         self.emit_line("str x0, [sp]");

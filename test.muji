@@ -1,5 +1,10 @@
-// Binary arithmetic, precedence, grouping, and unary minus.
+
+thoos b = 69;
+
+dhanda a() {
+    de b;
+}
 
 dhanda muji() {
-    bol(2);
+    bol(a());
 }
