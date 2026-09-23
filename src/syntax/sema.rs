@@ -64,11 +64,6 @@ impl Scope {
     }
 }
 
-struct LookaheadFunctionDefinition {
-    identifier: Identifier,
-    arity: usize,
-}
-
 #[derive(Default)]
 pub struct Counter {
     count: usize,
@@ -103,6 +98,11 @@ impl Resolution {
             .expect("Caller node id must have been resolved")
             .clone()
     }
+}
+
+struct LookaheadFunctionDefinition {
+    identifier: Identifier,
+    arity: usize,
 }
 
 pub struct Sema {
@@ -142,11 +142,8 @@ impl Sema {
             .expect("At least one scope must exist during semantic analysis")
     }
 
-    fn is_identifier_valid(&self, identifier_name: String) -> bool {
-        // I'm walking this up the stack and not down
-        // just for the fun of it and i feel like this shouldn't be a problem
-        // Let's see if this results in anything unexpected later
-        for stack in self.scopes_stack.iter() {
+    fn is_identifier_defined(&self, identifier_name: String) -> bool {
+        for stack in self.scopes_stack.iter().rev() {
             if stack.contains_identifier(identifier_name.clone()) {
                 return true;
             }
@@ -154,7 +151,10 @@ impl Sema {
         false
     }
 
-    fn get_symbol_info(&self, function_identifier_name: String) -> Option<&SymbolInfo> {
+    fn get_symbol_info_for_identifier(
+        &self,
+        function_identifier_name: String,
+    ) -> Option<&SymbolInfo> {
         for stack in self.scopes_stack.iter().rev() {
             if let Some(symbol_info) = stack.symbol_table.get(&function_identifier_name.clone()) {
                 return Some(symbol_info);
@@ -165,7 +165,7 @@ impl Sema {
         None
     }
 
-    fn push_new_scope(&mut self, scope: Scope) {
+    fn push_scope(&mut self, scope: Scope) {
         self.scopes_stack.push(scope);
     }
 
@@ -187,10 +187,12 @@ impl Sema {
         );
         // END DEBUG
 
+        // Pass 1
+        // Only allow function and variable definitions in the outer scope
+        // Process functions signatures first, so functions can be used before their definitions are set in
         for statement in &program.block.statements {
-            // Only allow function and variable definitions in the outer scope
-            // Process functions signatures first, so functions can be used before their definitions are set in
             match &statement.kind {
+                StatementKind::Declaration { .. } => {}
                 StatementKind::Function(FunctionDefinition {
                     identifier,
                     parameters,
@@ -215,7 +217,6 @@ impl Sema {
                             arity: parameters.len(),
                         })
                 }
-                StatementKind::Declaration { .. } => {}
                 _ => {
                     return Err(Diagnostic::error(
                         statement.span,
@@ -230,29 +231,30 @@ impl Sema {
             self.analyse_statement(statement)?;
         }
 
-        let diagnostic = Diagnostic::error(Span::new(0, 0), "No `muji` dhanda found");
+        let no_muji_found = Diagnostic::error(Span::new(0, 0), "No `muji` dhanda found");
 
         // Check the existence of mukhya jimmewar function `muji`
         match self.scopes_stack.first() {
             Some(global_scope) => {
                 if let Some(muji) = global_scope.symbol_table.get("muji") {
                     match muji {
+                        // Record `muji`'s node id as the entry point
                         SymbolInfo::Function(muji_symbol_info) => {
                             self.resolution.entry_point_node_id =
                                 Some(muji_symbol_info.identifier.node_id.clone());
                             return Ok(self.resolution);
                         }
-                        SymbolInfo::Variable(..) => return Err(diagnostic),
+                        SymbolInfo::Variable(..) => return Err(no_muji_found),
                     }
                 }
-                return Err(diagnostic);
+                return Err(no_muji_found);
             }
-            None => return Err(diagnostic),
+            None => return Err(no_muji_found),
         }
     }
 
     fn analyse_block(&mut self, block: &Block) -> Result<(), Diagnostic> {
-        self.push_new_scope(Scope::new(ScopeType::Block));
+        self.push_scope(Scope::new(ScopeType::Block));
         for statement in &block.statements {
             self.analyse_statement(statement)?;
         }
@@ -293,15 +295,15 @@ impl Sema {
                 body,
                 parameters,
             }) => {
-                let identifier_name = identifier.name.clone();
+                let function_name = identifier.name.clone();
 
                 if self
                     .get_current_scope()
-                    .contains_identifier(identifier.name.clone())
+                    .contains_identifier(function_name.clone())
                 {
                     return Err(Diagnostic::error(
                         identifier.span,
-                        format!("SEMA:: Identifier {identifier_name} has already been declared"),
+                        format!("SEMA:: Identifier {function_name} has already been declared"),
                     ));
                 }
 
@@ -309,9 +311,10 @@ impl Sema {
                 self.get_current_scope()
                     .add_function_identifier_with_arity(identifier, parameters.len());
 
-                self.push_new_scope(Scope::new(ScopeType::Function));
+                self.push_scope(Scope::new(ScopeType::Function));
                 for parameter in parameters {
                     let parameter_name = parameter.name.clone();
+                    // Each parameter identifier must be unique
                     if self
                         .get_current_scope()
                         .contains_identifier(parameter_name.clone())
@@ -341,7 +344,8 @@ impl Sema {
                 update,
                 body,
             } => {
-                self.push_new_scope(Scope::new(ScopeType::Block));
+                // For's parenthesis get their own scope
+                self.push_scope(Scope::new(ScopeType::Block));
                 if let Some(initializer) = initialiser {
                     self.analyse_statement(initializer)?;
                 }
@@ -358,7 +362,7 @@ impl Sema {
     fn analyse_expression(&mut self, expression: &Expression) -> Result<(), Diagnostic> {
         match &expression.kind {
             ExpressionKind::Identifier(identifier) => {
-                if !self.is_identifier_valid(identifier.clone()) {
+                if !self.is_identifier_defined(identifier.clone()) {
                     return Err(Diagnostic::error(
                         expression.span,
                         format!("SEMA:: Usage of undefined identifier {identifier}"),
@@ -377,7 +381,7 @@ impl Sema {
             ExpressionKind::Assignment { target, value } => {
                 self.analyse_expression(value)?;
                 let AssignmentTarget::Variable(identifier) = target;
-                if !self.is_identifier_valid(identifier.name.clone()) {
+                if !self.is_identifier_defined(identifier.name.clone()) {
                     return Err(Diagnostic::error(
                         identifier.span,
                         format!("SEMA:: Usage of undefined identifier {}", identifier.name),
@@ -394,16 +398,18 @@ impl Sema {
                 };
 
                 let function_name = callee.name.clone();
-                let mut was_resolved_from_scope_stack = false;
+                let mut was_callee_resolved_from_scope_stack = false;
 
                 // Check within the scope stack
                 // Scope stack takes priority over lookahead map
-                if let Some(symbol_info) = self.get_symbol_info(function_name.clone()) {
+                if let Some(symbol_info) =
+                    self.get_symbol_info_for_identifier(function_name.clone())
+                {
                     match symbol_info {
                         SymbolInfo::Variable(..) => {
                             return Err(Diagnostic::error(
                                 expression.span,
-                                "SEMA:: Called object is not a function".to_string(),
+                                "SEMA:: Called object is not a function",
                             ));
                         }
                         SymbolInfo::Function(FunctionSymbolInfo { arity, identifier }) => {
@@ -422,7 +428,7 @@ impl Sema {
                                     ),
                                 ));
                             }
-                            was_resolved_from_scope_stack = true;
+                            was_callee_resolved_from_scope_stack = true;
                             self.resolution
                                 .map
                                 .insert(callee.node_id.clone(), identifier.node_id.clone());
@@ -431,8 +437,8 @@ impl Sema {
                 }
 
                 // Check within the lookahead definitions
-                let mut was_resolved_from_lookahead_definitions = false;
-                if !was_resolved_from_scope_stack
+                let mut was_callee_resolved_from_lookahead_definitions = false;
+                if !was_callee_resolved_from_scope_stack
                     && let Some(fn_definition) = self
                         .lookahead_function_definitions
                         .iter()
@@ -453,13 +459,16 @@ impl Sema {
                             ),
                         ));
                     }
-                    was_resolved_from_lookahead_definitions = true;
+                    was_callee_resolved_from_lookahead_definitions = true;
                     self.resolution.map.insert(
                         callee.node_id.clone(),
                         fn_definition.identifier.node_id.clone(),
                     );
                 }
-                if !was_resolved_from_scope_stack && !was_resolved_from_lookahead_definitions {
+
+                if !was_callee_resolved_from_scope_stack
+                    && !was_callee_resolved_from_lookahead_definitions
+                {
                     return Err(Diagnostic::error(
                         callee.span,
                         format!("SEMA:: Usage of undefined function {function_name}"),
