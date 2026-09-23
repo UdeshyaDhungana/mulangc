@@ -80,23 +80,34 @@ impl Counter {
 pub struct Resolution {
     pub map: HashMap<String, String>,
     pub entry_point_node_id: Option<String>,
+    pub globals: Vec<String>,
 }
 
 impl Default for Resolution {
     fn default() -> Self {
         Self {
             map: HashMap::new(),
+            globals: Vec::new(),
             entry_point_node_id: None,
         }
     }
 }
 
 impl Resolution {
-    pub fn resolve(&self, caller_node_id: &String) -> String {
-        self.map
-            .get(caller_node_id)
-            .expect("Caller node id must have been resolved")
-            .clone()
+    pub fn resolve(&self, user_node_id: &String) -> String {
+        let mut resolved = self
+            .map
+            .get(user_node_id)
+            .expect("Caller node id must have been resolved");
+
+        // Keep re-resolving
+        loop {
+            if let Some(re_resolved) = self.map.get(resolved) {
+                resolved = re_resolved;
+            } else {
+                return resolved.clone();
+            }
+        }
     }
 }
 
@@ -282,6 +293,9 @@ impl Sema {
                     ));
                 }
                 self.get_current_scope().add_variable_identifier(identifier);
+                if self.in_global_scope() {
+                    self.resolution.globals.push(identifier.node_id.clone());
+                }
                 Ok(())
             }
             StatementKind::Return(expression) => {
@@ -373,6 +387,12 @@ impl Sema {
     fn analyse_expression(&mut self, expression: &Expression) -> Result<(), Diagnostic> {
         match &expression.kind {
             ExpressionKind::Identifier(identifier) => {
+                if self.in_global_scope() {
+                    return Err(Diagnostic::error(
+                        expression.span,
+                        "Cannot use identifier expression in global scope",
+                    ));
+                }
                 let Some(symbol_info) =
                     self.get_symbol_info_for_identifier(identifier.name.clone())
                 else {
@@ -697,17 +717,31 @@ mod tests {
 
     #[test]
     fn an_undefined_name_in_a_declaration_value() {
-        rejects("dhanda muji() { } thoos x = nope;", "nope");
+        rejects("dhanda muji() { thoos x = nope; }", "nope");
     }
 
     #[test]
     fn an_undefined_name_in_a_binary_operation() {
-        rejects("dhanda muji() { } thoos x = nope + 1;", "nope");
+        rejects("dhanda muji() { thoos x = nope + 1; }", "nope");
     }
 
     #[test]
     fn an_undefined_name_in_a_unary_operation() {
-        rejects("dhanda muji() { } thoos x = -nope;", "nope");
+        rejects("dhanda muji() { thoos x = -nope; }", "nope");
+    }
+
+    // A global's initialiser has to be a compile time constant, because it is
+    // emitted straight into the data section as a `.quad`.
+    #[test]
+    fn an_identifier_expression_in_the_global_scope() {
+        rejects(
+            "dhanda muji() { } thoos a = 1; thoos b = a;",
+            "Cannot use identifier expression",
+        );
+        rejects(
+            "dhanda muji() { } thoos a = 1; thoos b = a + 1;",
+            "Cannot use identifier expression",
+        );
     }
 
     #[test]

@@ -61,6 +61,7 @@ pub struct CodeGenerator {
     // For generating different text sections during codegen
     text_section_stack: Vec<Section>,
     registered_text_sections: Vec<Section>,
+    global_map: HashMap<String, i64>,
 }
 
 impl CodeGenerator {
@@ -71,7 +72,12 @@ impl CodeGenerator {
             text_section_stack: vec![Default::default()],
             registered_text_sections: Vec::new(),
             resolution: resolution,
+            global_map: HashMap::new(),
         }
+    }
+
+    fn is_global(&self, node_id: &String) -> bool {
+        self.resolution.globals.contains(node_id)
     }
 
     fn begin_new_text_section(&mut self) {
@@ -91,16 +97,25 @@ impl CodeGenerator {
         self.static_frames.last_mut().unwrap()
     }
 
+    fn get_frame_pointer_offset_for_node_id(&self, resolved_node_id: &String) -> i32 {
+        let mut sum_of_frame_sizes = 0;
+
+        for (idx, frame) in self.static_frames.iter().rev().enumerate() {
+            if idx != 0 {
+                sum_of_frame_sizes += 16 + frame.capacity_in_bytes;
+            }
+
+            if let Some(local_offset) = frame.offset_map.get(resolved_node_id) {
+                return TryInto::<i32>::try_into(sum_of_frame_sizes).unwrap() + local_offset;
+            }
+        }
+
+        panic!("CODEGEN:: No frame contains node with id {resolved_node_id}");
+    }
+
     fn push_frame_and_emit_assembly(&mut self, frame: Frame) {
         let frame_capacity = frame.capacity_in_bytes;
         self.static_frames.push(frame);
-
-        // Assembly for frame reservation
-        // x29 is the frame pointer and x30 is the return address
-        // So, for a new frame, we save the frame pointer and return address,
-        // then move `stack pointer` to `x29` to set up the frame pointer
-        // frame pointer is fixed because we'll need to calculate offsets
-        // for locals
         self.emit_line("stp x29, x30, [sp, #-16]!");
         self.emit_line("mov x29, sp");
 
@@ -180,7 +195,12 @@ impl CodeGenerator {
     }
 
     fn pop_to_x0(&mut self) {
-        self.emit_line("ldr x0, [sp], #16");
+        self.pop_to_xn(0);
+    }
+
+    // Pops from stack to register xn
+    fn pop_to_xn(&mut self, n: usize) {
+        self.emit_line(&format!("ldr x{n}, [sp], #16"));
     }
 
     fn pop_and_ignore_void(&mut self) {
@@ -219,32 +239,49 @@ impl CodeGenerator {
         self.pop_frame_and_emit_release_assembly();
         self.emit_line("ret");
         self.end_and_register_current_text_section();
+
+        self.begin_new_text_section();
+        self.emit_globals();
+        self.end_and_register_current_text_section();
         self.write_assembly_file()
     }
 
     fn emit_statement_assembly(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
         match &statement.kind {
             StatementKind::Declaration { identifier, value } => {
+                // In case of global variable, look ahead and store the global value
+                if self.is_global(&identifier.node_id) {
+                    match &value.kind {
+                        ExpressionKind::Integer(i) => {
+                            self.global_map.insert(identifier.node_id.clone(), *i);
+                        }
+                        _ => {
+                            panic!("CODEGEN:: Global value cannot be anything other than integer");
+                        }
+                    }
+                    return Ok(());
+                }
+
                 let next_offset = self.get_current_frame().get_next_offset();
 
                 self.get_current_frame()
                     .add_node_id_and_offset(identifier.node_id.clone(), next_offset);
 
-                self.emit_expression_assembly_and_push_to_stack(value)?;
+                self.emit_expression_evaluation_assembly_and_push_evaluated(value)?;
                 self.pop_to_x0();
                 self.emit_line(&format!("str x0, [x29, #{next_offset}]"));
                 self.emit_newline();
                 Ok(())
             }
             StatementKind::Return(return_expression) => {
-                self.emit_expression_assembly_and_push_to_stack(return_expression)?;
+                self.emit_expression_evaluation_assembly_and_push_evaluated(return_expression)?;
                 self.pop_to_x0();
                 self.emit_frame_release_assembly();
                 self.emit_line("ret");
                 Ok(())
             }
             StatementKind::Expression(expression) => {
-                self.emit_expression_assembly_and_push_to_stack(expression)?;
+                self.emit_expression_evaluation_assembly_and_push_evaluated(expression)?;
                 self.pop_and_ignore_void();
                 Ok(())
             }
@@ -317,7 +354,7 @@ impl CodeGenerator {
 
                 self.emit_outer_level_line(&format!("{while_start_label}:"));
 
-                self.emit_expression_assembly_and_push_to_stack(condition)?;
+                self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
                 self.pop_to_x0();
                 self.emit_line(&format!("cbz x0, {while_end_label}"));
 
@@ -342,13 +379,13 @@ impl CodeGenerator {
 
                 self.emit_outer_level_line(&format!("{while_condition_label}:"));
 
-                self.emit_expression_assembly_and_push_to_stack(condition)?;
+                self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
                 self.pop_to_x0();
                 self.emit_line(&format!("cbz x0, {while_end_label}"));
 
                 self.emit_block_assembly(body)?;
 
-                self.emit_expression_assembly_and_push_to_stack(update)?;
+                self.emit_expression_evaluation_assembly_and_push_evaluated(update)?;
                 self.pop_and_ignore_void();
 
                 self.emit_line(&format!("b {while_condition_label}"));
@@ -362,7 +399,7 @@ impl CodeGenerator {
         let else_label = format!("L{}_else", conditional.node_id);
         let end_label = format!("L{}_end", conditional.node_id);
 
-        self.emit_expression_assembly_and_push_to_stack(&conditional.condition)?;
+        self.emit_expression_evaluation_assembly_and_push_evaluated(&conditional.condition)?;
         self.pop_to_x0();
         self.emit_line(&format!("cbz x0, {else_label}"));
 
@@ -388,45 +425,22 @@ impl CodeGenerator {
     }
 
     // Generate a sequence of statements to evaluate an expression and put the value on the top of the stack
-    fn emit_expression_assembly_and_push_to_stack(
+    fn emit_expression_evaluation_assembly_and_push_evaluated(
         &mut self,
         expression: &Expression,
     ) -> Result<(), Diagnostic> {
         match &expression.kind {
             ExpressionKind::Identifier(identifier) => {
-                let identifier_name = identifier.name.clone();
-                let resolved_node_id = self
-                    .resolution
-                    .map
-                    .get(&identifier.node_id)
-                    .expect(&format!("Expected {identifier_name} to be resolved"));
+                let resolved_node_id = &self.resolution.resolve(&identifier.node_id);
 
-                let mut sum_of_frame_sizes = 0;
-                let mut containing_frame: Option<&Frame> = None;
-
-                for (idx, frame) in self.static_frames.iter().rev().enumerate() {
-                    if idx != 0 {
-                        sum_of_frame_sizes += 16 + frame.capacity_in_bytes;
-                    }
-
-                    if frame.offset_map.contains_key(resolved_node_id) {
-                        containing_frame = Some(frame);
-                        break;
-                    }
+                if self.is_global(resolved_node_id) {
+                    self.emit_line(&format!("adrp x0, L{resolved_node_id}@PAGE"));
+                    self.emit_line(&format!("ldr x0, [x0, L{resolved_node_id}@PAGEOFF]"));
+                    self.push_from_x0();
+                    return Ok(());
                 }
 
-                if containing_frame.is_none() {
-                    panic!("CODEGEN:: No frame contains node with id {resolved_node_id}");
-                }
-
-                let local_offset = containing_frame
-                    .unwrap()
-                    .offset_map
-                    .get(resolved_node_id)
-                    .unwrap();
-
-                let offset = (TryInto::<i32>::try_into(sum_of_frame_sizes).unwrap()) + local_offset;
-
+                let offset = self.get_frame_pointer_offset_for_node_id(resolved_node_id);
                 self.emit_line(&format!("ldr x0, [x29, #{offset}]"));
                 self.push_from_x0();
                 Ok(())
@@ -437,14 +451,13 @@ impl CodeGenerator {
                 Ok(())
             }
             ExpressionKind::Boolean(bool) => {
-                // We internally represent booleans as 1 (true) or 0 (false).
                 let bool_int = if *bool { 1 } else { 0 };
                 self.emit_line(&format!("mov x0, #{bool_int}"));
                 self.push_from_x0();
                 Ok(())
             }
             ExpressionKind::UnaryOperation { operator, operand } => {
-                self.emit_expression_assembly_and_push_to_stack(operand)?;
+                self.emit_expression_evaluation_assembly_and_push_evaluated(operand)?;
                 match operator {
                     UnaryOperator::Negate => {
                         self.pop_to_x0();
@@ -466,8 +479,8 @@ impl CodeGenerator {
                 left,
                 right,
             } => {
-                self.emit_expression_assembly_and_push_to_stack(left)?;
-                self.emit_expression_assembly_and_push_to_stack(right)?;
+                self.emit_expression_evaluation_assembly_and_push_evaluated(left)?;
+                self.emit_expression_evaluation_assembly_and_push_evaluated(right)?;
                 self.pop_to_x0();
                 self.emit_line("ldr x1, [sp], #16");
 
@@ -507,57 +520,30 @@ impl CodeGenerator {
                 Ok(())
             }
             ExpressionKind::Assignment { target, value } => {
-                self.emit_expression_assembly_and_push_to_stack(value)?;
+                self.emit_expression_evaluation_assembly_and_push_evaluated(value)?;
+                self.pop_to_xn(1);
 
                 let AssignmentTarget::Variable(identifier) = target;
-                let identifier_name = identifier.name.clone();
-                let mut sum_of_frame_sizes = 0;
-                let mut containing_frame: Option<&Frame> = None;
-                let resolved_node_id = self
-                    .resolution
-                    .map
-                    .get(&identifier.node_id)
-                    .expect(&format!("Expected {identifier_name} to be resolved"));
+                let resolved_node_id = self.resolution.resolve(&identifier.node_id);
 
-                for (idx, frame) in self.static_frames.iter().rev().enumerate() {
-                    if idx != 0 {
-                        sum_of_frame_sizes += 16 + frame.capacity_in_bytes;
-                    }
-
-                    if frame.offset_map.contains_key(resolved_node_id) {
-                        containing_frame = Some(frame);
-                        break;
-                    }
+                // Resolve from global data block
+                if self.is_global(&resolved_node_id) {
+                    self.emit_line(&format!("adrp x0, L{resolved_node_id}@PAGE"));
+                    self.emit_line(&format!("str x1, [x0, L{resolved_node_id}@PAGEOFF]"));
+                    self.emit_line("mov x0, x1");
+                    self.push_from_x0();
+                    return Ok(());
                 }
 
-                if containing_frame.is_none() {
-                    let msg = format!(
-                        "Expected at least one fraome to contain node id {resolved_node_id}"
-                    );
-                    panic!("Expected at least one fraome to contain node id {msg}")
-                }
-
-                let local_offset = containing_frame
-                    .unwrap()
-                    .offset_map
-                    .get(resolved_node_id)
-                    .unwrap();
-
-                let offset = (TryInto::<i64>::try_into(sum_of_frame_sizes).unwrap())
-                    + i64::from(*local_offset);
-
-                self.pop_to_x0();
+                let offset = self.get_frame_pointer_offset_for_node_id(&resolved_node_id);
                 self.emit_line(&format!("str x0, [x29, #{offset}]"));
-                // An assignment is an expression whose value is the
-                // value assigned, so `x = y = 3` works and binds to the
-                // right. `x0` still holds it, so push it back.
                 self.push_from_x0();
                 Ok(())
             }
             ExpressionKind::Call { callee, arguments } => {
                 // Stack arguments
                 for argument in arguments.iter().skip(8).rev() {
-                    self.emit_expression_assembly_and_push_to_stack(argument)?;
+                    self.emit_expression_evaluation_assembly_and_push_evaluated(argument)?;
                     self.pop_to_x0();
                     self.push_from_x0();
                 }
@@ -565,7 +551,7 @@ impl CodeGenerator {
                 let register_arguments: Vec<&Expression> = arguments.iter().take(8).collect();
 
                 for argument in register_arguments.iter().rev() {
-                    self.emit_expression_assembly_and_push_to_stack(argument)?;
+                    self.emit_expression_evaluation_assembly_and_push_evaluated(argument)?;
                 }
 
                 for idx in 0..register_arguments.len() {
@@ -623,6 +609,36 @@ impl CodeGenerator {
         self.emit_newline();
 
         self.emit_outer_level_line(".section __TEXT,__text,regular,pure_instructions");
+        self.emit_newline();
+    }
+
+    fn emit_globals(&mut self) {
+        if self.global_map.is_empty() {
+            return;
+        }
+
+        let globals: Vec<(String, i64)> = self
+            .resolution
+            .globals
+            .iter()
+            .map(|node_id| {
+                let value = *self
+                    .global_map
+                    .get(node_id)
+                    .expect("Every global must have been given a value during codegen");
+                (node_id.clone(), value)
+            })
+            .collect();
+
+        self.emit_outer_level_line("// GLOBALS");
+        self.emit_outer_level_line(".section __DATA,__data");
+
+        for (node_id, value) in globals {
+            self.emit_outer_level_line(".p2align 3");
+            self.emit_outer_level_line(&format!("L{node_id}:"));
+            self.emit_line(&format!(".quad {value}"));
+        }
+
         self.emit_newline();
     }
 
