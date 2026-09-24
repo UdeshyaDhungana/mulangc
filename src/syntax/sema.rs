@@ -14,11 +14,8 @@ struct FunctionSymbolInfo {
     arity: usize,
 }
 
-// I have a hunch that I'll change this to include types, etc.
-// after we incorporate them
 enum SymbolInfo {
     Function(FunctionSymbolInfo),
-    #[allow(dead_code)]
     Variable(Identifier),
 }
 

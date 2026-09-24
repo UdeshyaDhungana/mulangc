@@ -61,7 +61,7 @@ pub struct CodeGenerator {
     // For generating different text sections during codegen
     text_section_stack: Vec<Section>,
     registered_text_sections: Vec<Section>,
-    global_map: HashMap<String, i64>,
+    globals_value_map: HashMap<String, i64>,
 }
 
 impl CodeGenerator {
@@ -72,7 +72,7 @@ impl CodeGenerator {
             text_section_stack: vec![Default::default()],
             registered_text_sections: Vec::new(),
             resolution: resolution,
-            global_map: HashMap::new(),
+            globals_value_map: HashMap::new(),
         }
     }
 
@@ -190,15 +190,10 @@ impl CodeGenerator {
         }
     }
 
-    fn push_from_x0(&mut self) {
-        self.emit_line("str x0, [sp, #-16]!");
+    fn push_from_xn(&mut self, register: usize) {
+        self.emit_line(&format!("str x{register}, [sp, #-16]!"));
     }
 
-    fn pop_to_x0(&mut self) {
-        self.pop_to_xn(0);
-    }
-
-    // Pops from stack to register xn
     fn pop_to_xn(&mut self, n: usize) {
         self.emit_line(&format!("ldr x{n}, [sp], #16"));
     }
@@ -253,7 +248,8 @@ impl CodeGenerator {
                 if self.is_global(&identifier.node_id) {
                     match &value.kind {
                         ExpressionKind::Integer(i) => {
-                            self.global_map.insert(identifier.node_id.clone(), *i);
+                            self.globals_value_map
+                                .insert(identifier.node_id.clone(), *i);
                         }
                         _ => {
                             panic!("CODEGEN:: Global value cannot be anything other than integer");
@@ -268,14 +264,14 @@ impl CodeGenerator {
                     .add_node_id_and_offset(identifier.node_id.clone(), next_offset);
 
                 self.emit_expression_evaluation_assembly_and_push_evaluated(value)?;
-                self.pop_to_x0();
+                self.pop_to_xn(0);
                 self.emit_line(&format!("str x0, [x29, #{next_offset}]"));
                 self.emit_newline();
                 Ok(())
             }
             StatementKind::Return(return_expression) => {
                 self.emit_expression_evaluation_assembly_and_push_evaluated(return_expression)?;
-                self.pop_to_x0();
+                self.pop_to_xn(0);
                 self.emit_frame_release_assembly();
                 self.emit_line("ret");
                 Ok(())
@@ -355,7 +351,7 @@ impl CodeGenerator {
                 self.emit_outer_level_line(&format!("{while_start_label}:"));
 
                 self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
-                self.pop_to_x0();
+                self.pop_to_xn(0);
                 self.emit_line(&format!("cbz x0, {while_end_label}"));
 
                 self.emit_block_assembly(body)?;
@@ -380,7 +376,7 @@ impl CodeGenerator {
                 self.emit_outer_level_line(&format!("{while_condition_label}:"));
 
                 self.emit_expression_evaluation_assembly_and_push_evaluated(condition)?;
-                self.pop_to_x0();
+                self.pop_to_xn(0);
                 self.emit_line(&format!("cbz x0, {while_end_label}"));
 
                 self.emit_block_assembly(body)?;
@@ -395,12 +391,19 @@ impl CodeGenerator {
         }
     }
 
+    fn emit_block_assembly(&mut self, block: &Block) -> Result<(), Diagnostic> {
+        for statement in &block.statements {
+            self.emit_statement_assembly(statement)?;
+        }
+        Ok(())
+    }
+
     fn emit_conditional_assembly(&mut self, conditional: &Conditional) -> Result<(), Diagnostic> {
         let else_label = format!("L{}_else", conditional.node_id);
         let end_label = format!("L{}_end", conditional.node_id);
 
         self.emit_expression_evaluation_assembly_and_push_evaluated(&conditional.condition)?;
-        self.pop_to_x0();
+        self.pop_to_xn(0);
         self.emit_line(&format!("cbz x0, {else_label}"));
 
         self.emit_block_assembly(&conditional.then)?;
@@ -417,13 +420,6 @@ impl CodeGenerator {
         Ok(())
     }
 
-    fn emit_block_assembly(&mut self, block: &Block) -> Result<(), Diagnostic> {
-        for statement in &block.statements {
-            self.emit_statement_assembly(statement)?;
-        }
-        Ok(())
-    }
-
     // Generate a sequence of statements to evaluate an expression and put the value on the top of the stack
     fn emit_expression_evaluation_assembly_and_push_evaluated(
         &mut self,
@@ -436,34 +432,34 @@ impl CodeGenerator {
                 if self.is_global(resolved_node_id) {
                     self.emit_line(&format!("adrp x0, L{resolved_node_id}@PAGE"));
                     self.emit_line(&format!("ldr x0, [x0, L{resolved_node_id}@PAGEOFF]"));
-                    self.push_from_x0();
+                    self.push_from_xn(0);
                     return Ok(());
                 }
 
                 let offset = self.get_frame_pointer_offset_for_node_id(resolved_node_id);
                 self.emit_line(&format!("ldr x0, [x29, #{offset}]"));
-                self.push_from_x0();
+                self.push_from_xn(0);
                 Ok(())
             }
             ExpressionKind::Integer(integer) => {
                 self.emit_load_immediate_into_x0(*integer);
-                self.push_from_x0();
+                self.push_from_xn(0);
                 Ok(())
             }
             ExpressionKind::UnaryOperation { operator, operand } => {
                 self.emit_expression_evaluation_assembly_and_push_evaluated(operand)?;
                 match operator {
                     UnaryOperator::Negate => {
-                        self.pop_to_x0();
+                        self.pop_to_xn(0);
                         self.emit_line("neg x0, x0");
-                        self.push_from_x0();
+                        self.push_from_xn(0);
                         Ok(())
                     }
                     UnaryOperator::Not => {
-                        self.pop_to_x0();
+                        self.pop_to_xn(0);
                         self.emit_line("cmp x0, #0");
                         self.emit_line("cset x0, eq");
-                        self.push_from_x0();
+                        self.push_from_xn(0);
                         Ok(())
                     }
                 }
@@ -475,7 +471,7 @@ impl CodeGenerator {
             } => {
                 self.emit_expression_evaluation_assembly_and_push_evaluated(left)?;
                 self.emit_expression_evaluation_assembly_and_push_evaluated(right)?;
-                self.pop_to_x0();
+                self.pop_to_xn(0);
                 self.emit_line("ldr x1, [sp], #16");
 
                 match operator {
@@ -510,7 +506,7 @@ impl CodeGenerator {
                 }
 
                 // Push back onto the stack
-                self.push_from_x0();
+                self.push_from_xn(0);
                 Ok(())
             }
             ExpressionKind::Assignment { target, value } => {
@@ -525,21 +521,21 @@ impl CodeGenerator {
                     self.emit_line(&format!("adrp x0, L{resolved_node_id}@PAGE"));
                     self.emit_line(&format!("str x1, [x0, L{resolved_node_id}@PAGEOFF]"));
                     self.emit_line("mov x0, x1");
-                    self.push_from_x0();
+                    self.push_from_xn(0);
                     return Ok(());
                 }
 
                 let offset = self.get_frame_pointer_offset_for_node_id(&resolved_node_id);
                 self.emit_line(&format!("str x0, [x29, #{offset}]"));
-                self.push_from_x0();
+                self.push_from_xn(0);
                 Ok(())
             }
             ExpressionKind::Call { callee, arguments } => {
                 // Stack arguments
                 for argument in arguments.iter().skip(8).rev() {
                     self.emit_expression_evaluation_assembly_and_push_evaluated(argument)?;
-                    self.pop_to_x0();
-                    self.push_from_x0();
+                    self.pop_to_xn(0);
+                    self.push_from_xn(0);
                 }
 
                 let register_arguments: Vec<&Expression> = arguments.iter().take(8).collect();
@@ -564,7 +560,7 @@ impl CodeGenerator {
                 }
 
                 // Push the value onto the stack
-                self.push_from_x0();
+                self.push_from_xn(0);
                 return Ok(());
             }
         }
@@ -607,7 +603,7 @@ impl CodeGenerator {
     }
 
     fn emit_globals(&mut self) {
-        if self.global_map.is_empty() {
+        if self.globals_value_map.is_empty() {
             return;
         }
 
@@ -617,7 +613,7 @@ impl CodeGenerator {
             .iter()
             .map(|node_id| {
                 let value = *self
-                    .global_map
+                    .globals_value_map
                     .get(node_id)
                     .expect("Every global must have been given a value during codegen");
                 (node_id.clone(), value)
