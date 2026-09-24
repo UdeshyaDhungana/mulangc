@@ -21,6 +21,18 @@ on the way past.
 
 ## The language
 
+### Programs
+
+```muji
+thoos x = 6;
+bol(x * 7);
+```
+
+A program is a list of statements, run top to bottom. There is no required
+entry point: any statement may sit at the top level, including calls, loops and
+conditionals. A `muji` function is an ordinary function, and runs only if it is
+called.
+
 ### Variables (Statement)
 
 ```muji
@@ -43,8 +55,12 @@ bol(add(6, 9));
 ```
 
 Functions are declarations, not values — there are no closures and no anonymous
-functions, and a name always refers to a variable. They may be called before the
-line they are declared on.
+functions, and a name always refers to a variable. A function declared at the
+top level may be called before the line it is declared on.
+
+Functions may also be declared inside a function or a block. Such a function
+is visible only in the scope that declares it, from its declaration onwards,
+and may shadow a function of the same name further out.
 
 A function yields its `de` value; `de` always needs an expression after it.
 Falling off the end without reaching a `de` yields `0`. Arguments past the
@@ -137,13 +153,14 @@ src/
     token.rs           the lexical vocabulary; the only place keywords are spelled
     ast.rs             node types, and printing them back as source
     parser.rs          Pratt parser, with error recovery
+    sema.rs            name resolution and semantic checks
   compiler.rs        a Program in, macOS ARM64 assembly out
   main.rs            the command line
 ```
 
-Each layer is reachable through one entry point — `syntax::parse` and
-`compiler::Compiler` — so the front end can gain source maps or error recovery
-without anything downstream noticing.
+Each layer is reachable through one entry point — `syntax::parse`,
+`Sema::analyse` and `CodeGenerator::generate` — so the front end can gain
+source maps or error recovery without anything downstream noticing.
 
 Every node carries the span it was parsed from, so errors point at source:
 
@@ -155,8 +172,8 @@ error: `y` is not a valid identifier
   |     ^
 ```
 
-Parse errors are collected in one pass and reported together; the compiler
-stops at the first one it hits.
+Parse errors are collected in one pass and reported together, and so are
+semantic errors, one per broken statement.
 
 ## Tests
 
@@ -164,11 +181,12 @@ stops at the first one it hits.
 cargo test
 ```
 
-Unit tests sit next to what they cover: the lexer, the parser, and diagnostics.
+Unit tests sit next to what they cover: the lexer, the parser, sema, and
+diagnostics.
 
 `tests/programs/` is the end-to-end suite, and the only thing that exercises
 code generation. It is grouped into `expressions/`, `statements/`,
-`control_flow/` and `functions/`. Each `NAME.muji` has a `NAME.out` holding the
+`control_flow/`, `functions/` and `resolution/`. Each `NAME.muji` has a `NAME.out` holding the
 exact stdout it must produce, and optionally a `NAME.exit` holding its exit code
 (default `0`). `tests/programs.rs` compiles each one in its own scratch
 directory under `target/muji-tests/`, assembles it with `clang`, runs it, and
