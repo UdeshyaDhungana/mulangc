@@ -6,7 +6,7 @@ use crate::{
         AssignmentTarget, BinaryOperator, Block, Conditional, Else, Expression,
         ExpressionKind::{self},
         Program, Statement, StatementKind, UnaryOperator,
-        sema::Resolution,
+        sema::NodeIdResolution,
     },
 };
 
@@ -55,29 +55,23 @@ pub struct CodeGenerator {
     output_file: String,
 
     // Static scoping
-    resolution: Resolution,
+    resolution: NodeIdResolution,
     static_frames: Vec<Frame>,
 
     // For generating different text sections during codegen
     text_section_stack: Vec<Section>,
     registered_text_sections: Vec<Section>,
-    globals_value_map: HashMap<String, i64>,
 }
 
 impl CodeGenerator {
-    pub fn new(resolution: Resolution, output_file: &str) -> Self {
+    pub fn new(resolution: NodeIdResolution, output_file: &str) -> Self {
         Self {
             output_file: output_file.to_string(),
             static_frames: Vec::new(),
             text_section_stack: vec![Default::default()],
             registered_text_sections: Vec::new(),
             resolution: resolution,
-            globals_value_map: HashMap::new(),
         }
-    }
-
-    fn is_global(&self, node_id: &String) -> bool {
-        self.resolution.globals.contains(node_id)
     }
 
     fn begin_new_text_section(&mut self) {
@@ -235,29 +229,12 @@ impl CodeGenerator {
         self.emit_line("ret");
         self.end_and_register_current_text_section();
 
-        self.begin_new_text_section();
-        self.emit_globals();
-        self.end_and_register_current_text_section();
         self.write_assembly_file()
     }
 
     fn emit_statement_assembly(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
         match &statement.kind {
             StatementKind::Declaration { identifier, value } => {
-                // In case of global variable, look ahead and store the global value
-                if self.is_global(&identifier.node_id) {
-                    match &value.kind {
-                        ExpressionKind::Integer(i) => {
-                            self.globals_value_map
-                                .insert(identifier.node_id.clone(), *i);
-                        }
-                        _ => {
-                            panic!("CODEGEN:: Global value cannot be anything other than integer");
-                        }
-                    }
-                    return Ok(());
-                }
-
                 let next_offset = self.get_current_frame().get_next_offset();
 
                 self.get_current_frame()
@@ -428,14 +405,6 @@ impl CodeGenerator {
         match &expression.kind {
             ExpressionKind::Identifier(identifier) => {
                 let resolved_node_id = &self.resolution.resolve(&identifier.node_id);
-
-                if self.is_global(resolved_node_id) {
-                    self.emit_line(&format!("adrp x0, L{resolved_node_id}@PAGE"));
-                    self.emit_line(&format!("ldr x0, [x0, L{resolved_node_id}@PAGEOFF]"));
-                    self.push_from_xn(0);
-                    return Ok(());
-                }
-
                 let offset = self.get_frame_pointer_offset_for_node_id(resolved_node_id);
                 self.emit_line(&format!("ldr x0, [x29, #{offset}]"));
                 self.push_from_xn(0);
@@ -516,15 +485,6 @@ impl CodeGenerator {
                 let AssignmentTarget::Variable(identifier) = target;
                 let resolved_node_id = self.resolution.resolve(&identifier.node_id);
 
-                // Resolve from global data block
-                if self.is_global(&resolved_node_id) {
-                    self.emit_line(&format!("adrp x0, L{resolved_node_id}@PAGE"));
-                    self.emit_line(&format!("str x1, [x0, L{resolved_node_id}@PAGEOFF]"));
-                    self.emit_line("mov x0, x1");
-                    self.push_from_xn(0);
-                    return Ok(());
-                }
-
                 let offset = self.get_frame_pointer_offset_for_node_id(&resolved_node_id);
                 self.emit_line(&format!("str x0, [x29, #{offset}]"));
                 self.push_from_xn(0);
@@ -599,36 +559,6 @@ impl CodeGenerator {
         self.emit_newline();
 
         self.emit_outer_level_line(".section __TEXT,__text,regular,pure_instructions");
-        self.emit_newline();
-    }
-
-    fn emit_globals(&mut self) {
-        if self.globals_value_map.is_empty() {
-            return;
-        }
-
-        let globals: Vec<(String, i64)> = self
-            .resolution
-            .globals
-            .iter()
-            .map(|node_id| {
-                let value = *self
-                    .globals_value_map
-                    .get(node_id)
-                    .expect("Every global must have been given a value during codegen");
-                (node_id.clone(), value)
-            })
-            .collect();
-
-        self.emit_outer_level_line("// GLOBALS");
-        self.emit_outer_level_line(".section __DATA,__data");
-
-        for (node_id, value) in globals {
-            self.emit_outer_level_line(".p2align 3");
-            self.emit_outer_level_line(&format!("L{node_id}:"));
-            self.emit_line(&format!(".quad {value}"));
-        }
-
         self.emit_newline();
     }
 

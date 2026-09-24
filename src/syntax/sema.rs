@@ -74,37 +74,26 @@ impl Counter {
 }
 
 #[derive(Debug)]
-pub struct Resolution {
+pub struct NodeIdResolution {
     pub map: HashMap<String, String>,
     pub entry_point_node_id: Option<String>,
-    pub globals: Vec<String>,
 }
 
-impl Default for Resolution {
+impl Default for NodeIdResolution {
     fn default() -> Self {
         Self {
             map: HashMap::new(),
-            globals: Vec::new(),
             entry_point_node_id: None,
         }
     }
 }
 
-impl Resolution {
+impl NodeIdResolution {
     pub fn resolve(&self, user_node_id: &String) -> String {
-        let mut resolved = self
-            .map
+        self.map
             .get(user_node_id)
-            .expect("Caller node id must have been resolved");
-
-        // Keep re-resolving
-        loop {
-            if let Some(re_resolved) = self.map.get(resolved) {
-                resolved = re_resolved;
-            } else {
-                return resolved.clone();
-            }
-        }
+            .expect("Caller node id must have been resolved")
+            .clone()
     }
 }
 
@@ -114,11 +103,13 @@ struct LookaheadFunctionDefinition {
 }
 
 pub struct Sema {
-    // Stack of current scopes
     scopes_stack: Vec<Scope>,
-    lookahead_function_definitions: Vec<LookaheadFunctionDefinition>,
-    resolution: Resolution,
+    resolution: NodeIdResolution,
     diagnostics: Vec<Diagnostic>,
+    // Functions defined but not yet analysed
+    // We keep track of these (names, arity) so that
+    // they can be used before their definitions are analysed
+    lookahead_function_definitions: Vec<LookaheadFunctionDefinition>,
 }
 
 impl Default for Sema {
@@ -175,7 +166,7 @@ impl Sema {
         self.scopes_stack.pop();
     }
 
-    pub fn analyse(mut self, program: &Program) -> Result<Resolution, Vec<Diagnostic>> {
+    pub fn analyse(mut self, program: &Program) -> Result<NodeIdResolution, Vec<Diagnostic>> {
         self.scopes_stack.push(Scope::new(ScopeType::Global));
 
         // DEBUG: Just add `bol` builtin so analyzer won't complain
@@ -229,6 +220,7 @@ impl Sema {
             }
         }
 
+        // Pass 2
         // Process the rest of the statements
         self.analyse_statements_collecting_diagnostics(&program.block.statements);
 
@@ -238,17 +230,24 @@ impl Sema {
                 Some(SymbolInfo::Function(muji_symbol_info)) => {
                     Some(muji_symbol_info.identifier.node_id.clone())
                 }
-                Some(SymbolInfo::Variable(..)) | None => None,
+                Some(SymbolInfo::Variable(identifier)) => {
+                    self.diagnostics.push(Diagnostic::error(
+                        identifier.span,
+                        "`muji` cannot be a variable",
+                    ));
+                    None
+                }
+                _ => {
+                    self.diagnostics
+                        .push(Diagnostic::error(Span::new(0, 0), "No `muji` dhanda found"));
+                    None
+                }
             }
         });
 
-        match entry_point_node_id {
-            // Record `muji`'s node id as the entry point
-            Some(node_id) => self.resolution.entry_point_node_id = Some(node_id),
-            None => self
-                .diagnostics
-                .push(Diagnostic::error(Span::new(0, 0), "No `muji` dhanda found")),
-        }
+        if let Some(entry_node_id) = entry_point_node_id {
+            self.resolution.entry_point_node_id = Some(entry_node_id);
+        };
 
         if self.diagnostics.is_empty() {
             Ok(self.resolution)
@@ -289,10 +288,8 @@ impl Sema {
                         format!("SEMA:: Identifier {identifier_name} has already been declared"),
                     ));
                 }
+
                 self.get_current_scope().add_variable_identifier(identifier);
-                if self.in_global_scope() {
-                    self.resolution.globals.push(identifier.node_id.clone());
-                }
                 Ok(())
             }
             StatementKind::Return(expression) => {
@@ -310,12 +307,6 @@ impl Sema {
                 body,
                 parameters,
             }) => {
-                if !self.in_global_scope() {
-                    return Err(Diagnostic::error(
-                        identifier.span,
-                        format!("SEMA:: `dhanda` can only be declared in the global scope"),
-                    ));
-                }
                 let function_name = identifier.name.clone();
 
                 if self
@@ -568,7 +559,7 @@ mod tests {
     use super::*;
     use crate::syntax::parse;
 
-    fn analyse(source: &str) -> Result<Resolution, Vec<Diagnostic>> {
+    fn analyse(source: &str) -> Result<NodeIdResolution, Vec<Diagnostic>> {
         let program = parse(source)
             .unwrap_or_else(|diagnostics| panic!("should parse: {}", diagnostics[0].message));
         Sema::new().analyse(&program)
@@ -663,18 +654,96 @@ mod tests {
         accepts("dhanda muji() { thoos x = 1; yedi (1) { thoos x = 2; } }");
     }
 
+    #[test]
+    fn a_dhanda_may_be_declared_inside_a_dhanda() {
+        accepts("dhanda muji() { dhanda inner() { de 1; } }");
+    }
+
+    #[test]
+    fn a_dhanda_may_be_declared_inside_a_block() {
+        accepts("dhanda muji() { yedi (1) { dhanda inner() { de 1; } } }");
+        accepts("dhanda muji() { jabasamma (1) { dhanda inner() { de 1; } } }");
+    }
+
+    #[test]
+    fn a_nested_dhanda_is_callable_after_its_definition() {
+        accepts("dhanda muji() { dhanda inner(a) { de a; } bol(inner(1)); }");
+    }
+
+    #[test]
+    fn a_nested_dhanda_may_call_itself() {
+        accepts("dhanda muji() { dhanda inner(n) { de inner(n - 1); } }");
+    }
+
+    #[test]
+    fn a_nested_dhanda_may_read_its_enclosing_dhandas_variables() {
+        accepts("dhanda muji() { thoos x = 1; dhanda inner() { de x; } }");
+        accepts("dhanda muji() { dhanda outer(a) { dhanda inner() { de a; } } }");
+    }
+
+    #[test]
+    fn a_nested_dhanda_may_call_a_global_dhanda() {
+        accepts("dhanda muji() { dhanda inner() { de later(); } } dhanda later() { de 1; }");
+    }
+
+    #[test]
+    fn a_nested_dhanda_may_shadow_a_global_dhanda() {
+        accepts("dhanda f() { de 1; } dhanda muji() { dhanda f(a) { de a; } f(1); }");
+    }
+
+    #[test]
+    fn two_dhandas_may_each_nest_a_dhanda_of_the_same_name() {
+        accepts(
+            "dhanda muji() { dhanda inner() { de 1; } } \
+             dhanda other() { dhanda inner() { de 2; } }",
+        );
+    }
+
     /* ------------------------------------------------------------ rejected */
 
     #[test]
-    fn a_dhanda_declared_outside_the_global_scope() {
+    fn a_nested_dhanda_is_not_visible_outside_its_enclosing_dhanda() {
         rejects(
-            "dhanda muji() { dhanda inner() { de 1; } }",
-            "can only be declared",
+            "dhanda muji() { inner(); } dhanda other() { dhanda inner() { de 1; } }",
+            "inner",
         );
+    }
+
+    #[test]
+    fn a_nested_dhanda_is_not_visible_outside_its_block() {
         rejects(
-            "dhanda muji() { yedi (1) { dhanda inner() { de 1; } } }",
-            "can only be declared",
+            "dhanda muji() { yedi (1) { dhanda inner() { de 1; } } inner(); }",
+            "inner",
         );
+    }
+
+    #[test]
+    fn two_nested_dhandas_with_the_same_name_in_one_scope() {
+        rejects(
+            "dhanda muji() { dhanda inner() { de 1; } dhanda inner() { de 2; } }",
+            "already been declared",
+        );
+    }
+
+    #[test]
+    fn a_nested_dhanda_and_a_variable_with_the_same_name_in_one_scope() {
+        rejects(
+            "dhanda muji() { thoos inner = 1; dhanda inner() { de 1; } }",
+            "already been declared",
+        );
+    }
+
+    #[test]
+    fn a_nested_dhanda_still_has_its_arity_checked() {
+        rejects(
+            "dhanda muji() { dhanda inner(a, b) { de a; } inner(1); }",
+            "too few arguments",
+        );
+    }
+
+    #[test]
+    fn a_muji_nested_inside_a_dhanda_is_not_the_entry_point() {
+        rejects("dhanda outer() { dhanda muji() { } }", "muji");
     }
 
     #[test]
@@ -845,12 +914,12 @@ mod tests {
 
     // A `fanfani` pushes the scope for its parentheses before analysing its
     // initialiser, so a failing initialiser leaves that scope behind. If it is
-    // not cleaned up, every later statement is analysed one scope too deep and
-    // the next top-level `dhanda` is wrongly reported as not being global.
+    // not cleaned up, every later statement is analysed one scope too deep, so
+    // the `muji` defined after it lands outside the global scope and is not found.
     #[test]
     fn a_failed_for_loop_does_not_leave_its_scope_behind() {
         let diagnostics = analyse(
-            "dhanda muji() { fanfani (thoos i = missing; 1; i) { 1; } } dhanda later() { de 1; }",
+            "dhanda broken() { fanfani (thoos i = missing; 1; i) { 1; } } dhanda muji() { }",
         )
         .expect_err("should be rejected");
 

@@ -1,10 +1,10 @@
 
-thoos b = 69;
-
-dhanda a() {
-    de b;
-}
-
 dhanda muji() {
-    bol(a());
+    yedi (1) {
+        dhanda inner(){
+            de 234;
+        }
+
+        bol(inner());
+    }
 }
