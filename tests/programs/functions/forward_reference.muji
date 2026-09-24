@@ -21,3 +21,5 @@ dhanda muji() {
     bol(is_odd(10));
     bol(is_even(7));
 }
+
+muji();

@@ -21,3 +21,5 @@ dhanda muji() {
     bol(fib(1));
     bol(fib(10));
 }
+
+muji();

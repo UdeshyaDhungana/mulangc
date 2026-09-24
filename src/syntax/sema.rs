@@ -76,14 +76,12 @@ impl Counter {
 #[derive(Debug)]
 pub struct NodeIdResolution {
     pub map: HashMap<String, String>,
-    pub entry_point_node_id: Option<String>,
 }
 
 impl Default for NodeIdResolution {
     fn default() -> Self {
         Self {
             map: HashMap::new(),
-            entry_point_node_id: None,
         }
     }
 }
@@ -143,10 +141,6 @@ impl Sema {
             .expect("At least one scope must exist during semantic analysis")
     }
 
-    fn in_global_scope(&self) -> bool {
-        self.scopes_stack.len() == 1
-    }
-
     fn get_symbol_info_for_identifier(&self, identifier_name: String) -> Option<&SymbolInfo> {
         for stack in self.scopes_stack.iter().rev() {
             if let Some(symbol_info) = stack.symbol_table.get(&identifier_name.clone()) {
@@ -181,11 +175,9 @@ impl Sema {
         // END DEBUG
 
         // Pass 1
-        // Only allow function and variable definitions in the outer scope
         // Process functions signatures first, so functions can be used before their definitions are set in
         for statement in &program.block.statements {
             match &statement.kind {
-                StatementKind::Declaration { .. } => {}
                 StatementKind::Function(FunctionDefinition {
                     identifier,
                     parameters,
@@ -211,43 +203,13 @@ impl Sema {
                             arity: parameters.len(),
                         })
                 }
-                _ => {
-                    self.diagnostics.push(Diagnostic::error(
-                        statement.span,
-                        "SEMA:: Only functions and variables definitions are allowed in the global scope",
-                    ));
-                }
+                _ => {}
             }
         }
 
         // Pass 2
         // Process the rest of the statements
         self.analyse_statements_collecting_diagnostics(&program.block.statements);
-
-        // Check the existence of mukhya jimmewar function `muji`
-        let entry_point_node_id = self.scopes_stack.first().and_then(|global_scope| {
-            match global_scope.symbol_table.get("muji") {
-                Some(SymbolInfo::Function(muji_symbol_info)) => {
-                    Some(muji_symbol_info.identifier.node_id.clone())
-                }
-                Some(SymbolInfo::Variable(identifier)) => {
-                    self.diagnostics.push(Diagnostic::error(
-                        identifier.span,
-                        "`muji` cannot be a variable",
-                    ));
-                    None
-                }
-                _ => {
-                    self.diagnostics
-                        .push(Diagnostic::error(Span::new(0, 0), "No `muji` dhanda found"));
-                    None
-                }
-            }
-        });
-
-        if let Some(entry_node_id) = entry_point_node_id {
-            self.resolution.entry_point_node_id = Some(entry_node_id);
-        };
 
         if self.diagnostics.is_empty() {
             Ok(self.resolution)
@@ -375,12 +337,6 @@ impl Sema {
     fn analyse_expression(&mut self, expression: &Expression) -> Result<(), Diagnostic> {
         match &expression.kind {
             ExpressionKind::Identifier(identifier) => {
-                if self.in_global_scope() {
-                    return Err(Diagnostic::error(
-                        expression.span,
-                        "Cannot use identifier expression in global scope",
-                    ));
-                }
                 let Some(symbol_info) =
                     self.get_symbol_info_for_identifier(identifier.name.clone())
                 else {
@@ -446,13 +402,6 @@ impl Sema {
                 Ok(())
             }
             ExpressionKind::Call { callee, arguments } => {
-                let Some(_) = self.get_enclosing_function_scope() else {
-                    return Err(Diagnostic::error(
-                        expression.span,
-                        "SEMA:: Function calls are not allowed in global scope",
-                    ));
-                };
-
                 let function_name = callee.name.clone();
                 let mut was_callee_resolved_from_scope_stack = false;
 
@@ -742,13 +691,8 @@ mod tests {
     }
 
     #[test]
-    fn a_muji_nested_inside_a_dhanda_is_not_the_entry_point() {
-        rejects("dhanda outer() { dhanda muji() { } }", "muji");
-    }
-
-    #[test]
-    fn a_program_without_a_main_function() {
-        rejects("thoos x = 1;", "muji");
+    fn a_program_without_a_muji_is_accepted() {
+        accepts("thoos x = 1;");
     }
 
     #[test]
@@ -795,18 +739,10 @@ mod tests {
         rejects("dhanda muji() { thoos x = -nope; }", "nope");
     }
 
-    // A global's initialiser has to be a compile time constant, because it is
-    // emitted straight into the data section as a `.quad`.
     #[test]
-    fn an_identifier_expression_in_the_global_scope() {
-        rejects(
-            "dhanda muji() { } thoos a = 1; thoos b = a;",
-            "Cannot use identifier expression",
-        );
-        rejects(
-            "dhanda muji() { } thoos a = 1; thoos b = a + 1;",
-            "Cannot use identifier expression",
-        );
+    fn a_global_may_be_initialised_from_another_global() {
+        accepts("dhanda muji() { } thoos a = 1; thoos b = a;");
+        accepts("dhanda muji() { } thoos a = 1; thoos b = a + 1;");
     }
 
     #[test]
@@ -871,15 +807,12 @@ mod tests {
     }
 
     #[test]
-    fn only_definitions_at_the_top_level() {
-        rejects("dhanda muji() { } bol(1);", "global scope");
-        rejects("dhanda muji() { } 1 + 1;", "global scope");
-        rejects("dhanda muji() { } yedi (1) { 1; }", "global scope");
-        rejects("dhanda muji() { } jabasamma (1) { 1; }", "global scope");
-        rejects(
-            "dhanda muji() { } fanfani (thoos i = 0; 1; i) { 1; }",
-            "global scope",
-        );
+    fn any_statement_is_allowed_at_the_top_level() {
+        accepts("dhanda muji() { } bol(1);");
+        accepts("dhanda muji() { } 1 + 1;");
+        accepts("dhanda muji() { } yedi (1) { 1; }");
+        accepts("dhanda muji() { } jabasamma (1) { 1; }");
+        accepts("dhanda muji() { } fanfani (thoos i = 0; 1; i) { 1; }");
     }
 
     #[test]
@@ -889,7 +822,7 @@ mod tests {
 
     #[test]
     fn a_return_outside_any_function() {
-        rejects("dhanda muji() { } de 1;", "global scope");
+        rejects("dhanda muji() { } de 1;", "inside a `dhanda`");
     }
 
     #[test]

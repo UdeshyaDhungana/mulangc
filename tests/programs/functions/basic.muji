@@ -19,3 +19,5 @@ dhanda muji() {
     bol(t);
     bol(t * 2);
 }
+
+muji();

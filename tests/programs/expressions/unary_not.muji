@@ -37,3 +37,5 @@ dhanda muji() {
         done = 1;
     }
 }
+
+muji();

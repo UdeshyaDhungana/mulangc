@@ -1,10 +1,4 @@
-
-dhanda muji() {
-    yedi (1) {
-        dhanda inner(){
-            de 234;
-        }
-
-        bol(inner());
+dhanda outer() {
+    dhanda muji() {
     }
 }

@@ -21,3 +21,5 @@ dhanda muji() {
     bol(compute(4, 5));
     bol(mutate(5));
 }
+
+muji();

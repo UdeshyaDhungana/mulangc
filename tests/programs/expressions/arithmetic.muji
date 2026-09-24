@@ -9,3 +9,5 @@ dhanda muji() {
     bol(-7 + 2);
     bol(-(3 * 4));
 }
+
+muji();

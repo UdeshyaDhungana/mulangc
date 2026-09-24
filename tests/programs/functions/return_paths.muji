@@ -30,3 +30,5 @@ dhanda muji() {
     bol(deep(5));
     bol(deep(-5));
 }
+
+muji();

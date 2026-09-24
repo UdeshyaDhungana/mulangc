@@ -82,3 +82,5 @@ dhanda muji() {
         bol(30);
     }
 }
+
+muji();

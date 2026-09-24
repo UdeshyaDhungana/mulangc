@@ -15,3 +15,5 @@ dhanda muji() {
     size = size + 5;
     bol(size);
 }
+
+muji();

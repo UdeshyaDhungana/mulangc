@@ -25,3 +25,5 @@ dhanda muji() {
     bol(ends_with_de(5));
     bol(returns_immediately());
 }
+
+muji();

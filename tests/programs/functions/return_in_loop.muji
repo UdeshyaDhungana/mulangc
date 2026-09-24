@@ -27,3 +27,5 @@ dhanda muji() {
     bol(find_root(49));
     bol(find_root(50));
 }
+
+muji();

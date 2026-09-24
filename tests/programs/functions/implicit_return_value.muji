@@ -18,3 +18,5 @@ dhanda muji() {
     thoos t = nothing();
     bol(t + 1);
 }
+
+muji();

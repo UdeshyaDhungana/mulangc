@@ -11,3 +11,5 @@ dhanda muji() {
 
     bol(sum);
 }
+
+muji();

@@ -36,3 +36,5 @@ dhanda muji() {
     bol(first_match(50));
     bol(after_while(4));
 }
+
+muji();

@@ -12,3 +12,5 @@ dhanda muji() {
     bol(eight(1, 2, 3, 4, 5, 6, 7, 8));
     bol(three(1, 2, 3));
 }
+
+muji();

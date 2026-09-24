@@ -23,3 +23,5 @@ dhanda muji() {
     bol(caller(1));
     bol(99);
 }
+
+muji();

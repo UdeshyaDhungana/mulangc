@@ -215,13 +215,6 @@ impl CodeGenerator {
             self.emit_statement_assembly(statement)?;
         }
 
-        // Defense check
-        let Some(entry_node) = &self.resolution.entry_point_node_id else {
-            panic!("CODEGEN:: No entry node found");
-        };
-
-        self.emit_line(&format!("bl {entry_node}"));
-
         // return 0;
         // later on we should change this once we get to exit codes
         self.emit_line("mov x0, #0");

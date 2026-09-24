@@ -9,3 +9,5 @@ dhanda muji() {
     bol(2 == 2);
     bol(2 != 2);
 }
+
+muji();
