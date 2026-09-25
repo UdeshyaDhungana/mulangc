@@ -11,7 +11,9 @@ use crate::{
 
 pub type MemoryUnit = usize;
 
-pub const GLOBAL_FRAME_NODE_ID: &str = "_main";
+pub const MAIN_FUNCTION: &str = "_main";
+
+pub const STATIC_LINK_SLOT: MemoryUnit = 0;
 
 struct FunctionSymbolInfo {
     identifier: Identifier,
@@ -84,21 +86,28 @@ pub struct VariableLocation {
 }
 
 #[derive(Debug)]
+pub struct FunctionLocation {
+    pub depth: usize,
+    pub size: MemoryUnit,
+}
+
+#[derive(Debug)]
+pub enum IdentifierLocation {
+    Variable(VariableLocation),
+    Function(FunctionLocation),
+}
+
+#[derive(Debug)]
 pub struct Resolution {
     pub node_id_resolution_map: HashMap<String, String>,
-    pub variable_locations: HashMap<String, VariableLocation>,
-    // Keyed by frame id, which is the node id of the function to which
-    // that frame belongs to
-    // (GLOBAL_FRAME_NODE_ID for the top level)
-    pub frame_sizes: HashMap<String, MemoryUnit>,
+    pub identifier_locations: HashMap<String, IdentifierLocation>,
 }
 
 impl Default for Resolution {
     fn default() -> Self {
         Self {
             node_id_resolution_map: HashMap::new(),
-            variable_locations: HashMap::new(),
-            frame_sizes: HashMap::new(),
+            identifier_locations: HashMap::new(),
         }
     }
 }
@@ -172,7 +181,14 @@ impl Sema {
     }
 
     fn push_frame(&mut self, frame_id: String) {
-        self.frames_stack.push((frame_id, 0));
+        self.frames_stack.push((frame_id, 1));
+    }
+
+    fn record_frame_location(&mut self, frame_id: String, depth: usize) {
+        self.resolution.identifier_locations.insert(
+            frame_id,
+            IdentifierLocation::Function(FunctionLocation { depth, size: 0 }),
+        );
     }
 
     fn pop_frame_and_record_size(&mut self) {
@@ -180,10 +196,14 @@ impl Sema {
             .frames_stack
             .pop()
             .expect("A frame must exist to be popped");
-        self.resolution.frame_sizes.insert(frame_id, size);
+        if let Some(IdentifierLocation::Function(location)) =
+            self.resolution.identifier_locations.get_mut(&frame_id)
+        {
+            location.size = size;
+        }
     }
 
-    fn allocate_slot_for_variable(&mut self, identifier: &Identifier) {
+    fn allocate_slot_for_variable_to_current_frame(&mut self, identifier: &Identifier) {
         let depth = self.frames_stack.len() - 1;
         let (_, size) = self
             .frames_stack
@@ -191,12 +211,12 @@ impl Sema {
             .expect("At least one frame must exist during semantic analysis");
         let slot = *size;
         *size += 1;
-        self.resolution.variable_locations.insert(
+        self.resolution.identifier_locations.insert(
             identifier.node_id.clone(),
-            VariableLocation {
+            IdentifierLocation::Variable(VariableLocation {
                 depth,
                 offset: slot,
-            },
+            }),
         );
     }
 
@@ -210,7 +230,8 @@ impl Sema {
 
     pub fn analyse(mut self, program: &Program) -> Result<Resolution, Vec<Diagnostic>> {
         self.scopes_stack.push(Scope::new(ScopeType::Global));
-        self.push_frame(String::from(GLOBAL_FRAME_NODE_ID));
+        self.record_frame_location(String::from(MAIN_FUNCTION), 0);
+        self.push_frame(String::from(MAIN_FUNCTION));
 
         // DEBUG: Just add `bol` builtin so analyzer won't complain
         self.get_current_scope().add_function_identifier_with_arity(
@@ -221,6 +242,7 @@ impl Sema {
             },
             1,
         );
+        self.record_frame_location(String::from("_debug_bol"), 0);
         // END DEBUG
 
         // Pass 1
@@ -304,7 +326,7 @@ impl Sema {
                 }
 
                 self.get_current_scope().add_variable_identifier(identifier);
-                self.allocate_slot_for_variable(identifier);
+                self.allocate_slot_for_variable_to_current_frame(identifier);
                 Ok(())
             }
             StatementKind::Return(expression) => {
@@ -337,6 +359,7 @@ impl Sema {
                 // We should allow recursive calls, so register early
                 self.get_current_scope()
                     .add_function_identifier_with_arity(identifier, parameters.len());
+                self.record_frame_location(identifier.node_id.clone(), self.frames_stack.len() - 1);
 
                 self.push_scope(Scope::new(ScopeType::Function));
                 self.push_frame(identifier.node_id.clone());
@@ -353,7 +376,7 @@ impl Sema {
                         ));
                     }
                     self.get_current_scope().add_variable_identifier(parameter);
-                    self.allocate_slot_for_variable(parameter);
+                    self.allocate_slot_for_variable_to_current_frame(parameter);
                 }
                 self.analyse_statements_collecting_diagnostics(&body.statements);
                 self.pop_frame_and_record_size();

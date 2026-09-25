@@ -1,0 +1,19 @@
+// A top-level variable read by a dhanda that is only reached through a chain
+// of calls. `a` finds `x` by following its static link to `_main`'s frame,
+// where slot 0 is the static link slot and `x` sits after it.
+
+thoos x = 3;
+
+dhanda a() {
+    de x;
+}
+
+dhanda b() {
+    de a();
+}
+
+dhanda muji() {
+    bol(b());
+}
+
+muji();

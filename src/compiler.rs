@@ -4,7 +4,10 @@ use crate::{
         AssignmentTarget, BinaryOperator, Block, Conditional, Else, Expression,
         ExpressionKind::{self},
         Program, Statement, StatementKind, UnaryOperator,
-        sema::{GLOBAL_FRAME_NODE_ID, MemoryUnit, Resolution},
+        sema::{
+            FunctionLocation, IdentifierLocation, MAIN_FUNCTION, MemoryUnit, Resolution,
+            STATIC_LINK_SLOT, VariableLocation,
+        },
     },
 };
 
@@ -53,29 +56,57 @@ impl CodeGenerator {
             .push(self.text_section_stack.pop().unwrap())
     }
 
-    fn get_frame_size_in_bytes(&self, frame_id: &str) -> usize {
-        let size = self
-            .resolution
-            .frame_sizes
-            .get(frame_id)
-            .unwrap_or_else(|| panic!("CODEGEN:: No frame size recorded for {frame_id}"));
-        translate_memory_units_to_bytes(*size)
+    fn get_function_location(&self, function_node_id: &str) -> &FunctionLocation {
+        match self.resolution.identifier_locations.get(function_node_id) {
+            Some(IdentifierLocation::Function(location)) => location,
+            _ => panic!("CODEGEN:: No function location recorded for {function_node_id}"),
+        }
     }
 
-    fn get_frame_pointer_offset_for_node_id(&self, declaration_node_id: &String) -> i32 {
-        let location = self
+    fn get_variable_location(&self, declaration_node_id: &str) -> &VariableLocation {
+        match self
             .resolution
-            .variable_locations
+            .identifier_locations
             .get(declaration_node_id)
-            .unwrap_or_else(|| {
-                panic!("CODEGEN:: No location recorded for node with id {declaration_node_id}")
-            });
+        {
+            Some(IdentifierLocation::Variable(location)) => location,
+            _ => panic!("CODEGEN:: No variable location recorded for {declaration_node_id}"),
+        }
+    }
 
-        if location.depth != self.current_depth {
-            todo!("static links");
+    fn get_frame_size_in_bytes(&self, frame_id: &str) -> usize {
+        translate_memory_units_to_bytes(self.get_function_location(frame_id).size)
+    }
+
+    // Returns the register holding the frame pointer of the frame the variable lives in,
+    // and the variable's offset from it
+    fn get_frame_pointer_offset_for_node_id(
+        &mut self,
+        declaration_node_id: &String,
+        scratch_register: usize,
+    ) -> (String, i32) {
+        let location = self.get_variable_location(declaration_node_id);
+        let hops = self.current_depth - location.depth;
+        let frame_local_offset = translate_slot_to_frame_pointer_offset(location.offset);
+
+        if hops == 0 {
+            return (String::from("x29"), frame_local_offset);
         }
 
-        translate_slot_to_frame_pointer_offset(location.offset)
+        self.emit_static_link_walk(hops, scratch_register);
+        (format!("x{scratch_register}"), frame_local_offset)
+    }
+
+    // Leaves the frame pointer `hops` lexical levels out in the given register
+    fn emit_static_link_walk(&mut self, hops: usize, register: usize) {
+        let static_link_offset = translate_slot_to_frame_pointer_offset(STATIC_LINK_SLOT);
+        self.emit_line(&format!("ldr x{register}, [x29, #{static_link_offset}]"));
+        // Keep walking n times
+        for _ in 1..hops {
+            self.emit_line(&format!(
+                "ldr x{register}, [x{register}, #{static_link_offset}]"
+            ));
+        }
     }
 
     fn push_frame_and_emit_assembly(&mut self, frame_size_in_bytes: usize) {
@@ -170,7 +201,7 @@ impl CodeGenerator {
         self.emit_outer_level_line(".p2align 2");
         self.emit_outer_level_line("_main:");
 
-        self.push_frame_and_emit_assembly(self.get_frame_size_in_bytes(GLOBAL_FRAME_NODE_ID));
+        self.push_frame_and_emit_assembly(self.get_frame_size_in_bytes(MAIN_FUNCTION));
 
         for statement in &program.block.statements {
             self.emit_statement_assembly(statement)?;
@@ -189,11 +220,12 @@ impl CodeGenerator {
     fn emit_statement_assembly(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
         match &statement.kind {
             StatementKind::Declaration { identifier, value } => {
-                let offset = self.get_frame_pointer_offset_for_node_id(&identifier.node_id);
+                let (frame_pointer, offset) =
+                    self.get_frame_pointer_offset_for_node_id(&identifier.node_id, 1);
 
                 self.emit_expression_evaluation_assembly_and_push_evaluated(value)?;
                 self.pop_to_xn(0);
-                self.emit_line(&format!("str x0, [x29, #{offset}]"));
+                self.emit_line(&format!("str x0, [{frame_pointer}, #{offset}]"));
                 self.emit_newline();
                 Ok(())
             }
@@ -228,17 +260,24 @@ impl CodeGenerator {
                     self.get_frame_size_in_bytes(&definition.identifier.node_id),
                 );
 
+                // Store from x15 (passed in frame pointer) to the slot
+                let static_link_offset = translate_slot_to_frame_pointer_offset(STATIC_LINK_SLOT);
+                self.emit_line(&format!("str x15, [x29, #{static_link_offset}]"));
+
                 for (idx, parameter) in definition.parameters.iter().enumerate() {
-                    let next_offset = self.get_frame_pointer_offset_for_node_id(&parameter.node_id);
+                    let (frame_pointer, next_offset) =
+                        self.get_frame_pointer_offset_for_node_id(&parameter.node_id, 11);
 
                     // The first 8 arguments live on x0..x7, the rest live on the stack in increasing order
                     if idx < 8 {
                         let register_name = format!("x{}", idx);
-                        self.emit_line(&format!("str {register_name}, [x29, #{next_offset}]"));
+                        self.emit_line(&format!(
+                            "str {register_name}, [{frame_pointer}, #{next_offset}]"
+                        ));
                     } else {
                         let offset_from_old_sp = (idx - 8) * 16;
                         self.emit_line(&format!("ldr x10, [x9, #{offset_from_old_sp}]"));
-                        self.emit_line(&format!("str x10, [x29, #{next_offset}]"));
+                        self.emit_line(&format!("str x10, [{frame_pointer}, #{next_offset}]"));
                     }
                 }
 
@@ -352,8 +391,9 @@ impl CodeGenerator {
         match &expression.kind {
             ExpressionKind::Identifier(identifier) => {
                 let resolved_node_id = &self.resolution.resolve(&identifier.node_id);
-                let offset = self.get_frame_pointer_offset_for_node_id(resolved_node_id);
-                self.emit_line(&format!("ldr x0, [x29, #{offset}]"));
+                let (frame_pointer, offset) =
+                    self.get_frame_pointer_offset_for_node_id(resolved_node_id, 0);
+                self.emit_line(&format!("ldr x0, [{frame_pointer}, #{offset}]"));
                 self.push_from_xn(0);
                 Ok(())
             }
@@ -432,8 +472,9 @@ impl CodeGenerator {
                 let AssignmentTarget::Variable(identifier) = target;
                 let resolved_node_id = self.resolution.resolve(&identifier.node_id);
 
-                let offset = self.get_frame_pointer_offset_for_node_id(&resolved_node_id);
-                self.emit_line(&format!("str x0, [x29, #{offset}]"));
+                let (frame_pointer, offset) =
+                    self.get_frame_pointer_offset_for_node_id(&resolved_node_id, 2);
+                self.emit_line(&format!("str x0, [{frame_pointer}, #{offset}]"));
                 self.push_from_xn(0);
                 Ok(())
             }
@@ -457,6 +498,17 @@ impl CodeGenerator {
                 }
 
                 let node_id = self.resolution.resolve(&callee.node_id);
+
+                // Static links
+                // If I'm the parent, I store in x15 my own x29(fp)
+                // If I'm not, store into x15 whatever fp I was called with
+                let hops = self.current_depth - self.get_function_location(&node_id).depth;
+                if hops == 0 {
+                    self.emit_line("mov x15, x29");
+                } else {
+                    self.emit_static_link_walk(hops, 15);
+                }
+
                 self.emit_line(&format!("bl {node_id}",));
 
                 // Pop stack arguments

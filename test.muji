@@ -1,4 +1,15 @@
-dhanda outer() {
-    dhanda muji() {
-    }
+thoos x = 3;
+
+dhanda a() {
+	de x;
 }
+
+dhanda b() {
+	de a();
+}
+
+dhanda muji() {
+	bol(b());
+}
+
+muji();

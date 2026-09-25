@@ -1,0 +1,23 @@
+// Several top-level variables read from a dhanda two calls deep. Each one
+// has to land on its own slot in `_main`'s frame, after the static link slot.
+
+thoos x = 1;
+thoos y = 20;
+thoos z = 300;
+
+dhanda sum() {
+    de x + y + z;
+}
+
+dhanda middle() {
+    de sum();
+}
+
+dhanda muji() {
+    bol(x);
+    bol(y);
+    bol(z);
+    bol(middle());
+}
+
+muji();
