@@ -9,6 +9,10 @@ use crate::{
     },
 };
 
+pub type MemoryUnit = usize;
+
+pub const GLOBAL_FRAME_NODE_ID: &str = "_main";
+
 struct FunctionSymbolInfo {
     identifier: Identifier,
     arity: usize,
@@ -74,14 +78,27 @@ impl Counter {
 }
 
 #[derive(Debug)]
+pub struct VariableLocation {
+    pub depth: usize,
+    pub offset: MemoryUnit,
+}
+
+#[derive(Debug)]
 pub struct NodeIdResolution {
     pub map: HashMap<String, String>,
+    pub variable_locations: HashMap<String, VariableLocation>,
+    // Keyed by frame id, which is the node id of the function to which
+    // that frame belongs to
+    // (GLOBAL_FRAME_NODE_ID for the top level)
+    pub frame_sizes: HashMap<String, MemoryUnit>,
 }
 
 impl Default for NodeIdResolution {
     fn default() -> Self {
         Self {
             map: HashMap::new(),
+            variable_locations: HashMap::new(),
+            frame_sizes: HashMap::new(),
         }
     }
 }
@@ -102,6 +119,7 @@ struct LookaheadFunctionDefinition {
 
 pub struct Sema {
     scopes_stack: Vec<Scope>,
+    frames_stack: Vec<(String, MemoryUnit)>,
     resolution: NodeIdResolution,
     diagnostics: Vec<Diagnostic>,
     // Functions defined but not yet analysed
@@ -120,6 +138,7 @@ impl Sema {
     pub fn new() -> Self {
         Self {
             scopes_stack: Vec::new(),
+            frames_stack: Vec::new(),
             lookahead_function_definitions: Vec::new(),
             resolution: Default::default(),
             diagnostics: Vec::new(),
@@ -152,6 +171,35 @@ impl Sema {
         None
     }
 
+    fn push_frame(&mut self, frame_id: String) {
+        self.frames_stack.push((frame_id, 0));
+    }
+
+    fn pop_frame_and_record_size(&mut self) {
+        let (frame_id, size) = self
+            .frames_stack
+            .pop()
+            .expect("A frame must exist to be popped");
+        self.resolution.frame_sizes.insert(frame_id, size);
+    }
+
+    fn allocate_slot_for_variable(&mut self, identifier: &Identifier) {
+        let depth = self.frames_stack.len() - 1;
+        let (_, size) = self
+            .frames_stack
+            .last_mut()
+            .expect("At least one frame must exist during semantic analysis");
+        let slot = *size;
+        *size += 1;
+        self.resolution.variable_locations.insert(
+            identifier.node_id.clone(),
+            VariableLocation {
+                depth,
+                offset: slot,
+            },
+        );
+    }
+
     fn push_scope(&mut self, scope: Scope) {
         self.scopes_stack.push(scope);
     }
@@ -162,6 +210,7 @@ impl Sema {
 
     pub fn analyse(mut self, program: &Program) -> Result<NodeIdResolution, Vec<Diagnostic>> {
         self.scopes_stack.push(Scope::new(ScopeType::Global));
+        self.push_frame(String::from(GLOBAL_FRAME_NODE_ID));
 
         // DEBUG: Just add `bol` builtin so analyzer won't complain
         self.get_current_scope().add_function_identifier_with_arity(
@@ -210,6 +259,7 @@ impl Sema {
         // Pass 2
         // Process the rest of the statements
         self.analyse_statements_collecting_diagnostics(&program.block.statements);
+        self.pop_frame_and_record_size();
 
         if self.diagnostics.is_empty() {
             Ok(self.resolution)
@@ -221,9 +271,11 @@ impl Sema {
     fn analyse_statements_collecting_diagnostics(&mut self, statements: &[Statement]) {
         for statement in statements {
             let scope_depth_before_statement = self.scopes_stack.len();
+            let frame_depth_before_statement = self.frames_stack.len();
             if let Err(diagnostic) = self.analyse_statement(statement) {
                 self.diagnostics.push(diagnostic);
                 self.scopes_stack.truncate(scope_depth_before_statement);
+                self.frames_stack.truncate(frame_depth_before_statement);
             }
         }
     }
@@ -252,6 +304,7 @@ impl Sema {
                 }
 
                 self.get_current_scope().add_variable_identifier(identifier);
+                self.allocate_slot_for_variable(identifier);
                 Ok(())
             }
             StatementKind::Return(expression) => {
@@ -286,6 +339,7 @@ impl Sema {
                     .add_function_identifier_with_arity(identifier, parameters.len());
 
                 self.push_scope(Scope::new(ScopeType::Function));
+                self.push_frame(identifier.node_id.clone());
                 for parameter in parameters {
                     let parameter_name = parameter.name.clone();
                     // Each parameter identifier must be unique
@@ -299,8 +353,10 @@ impl Sema {
                         ));
                     }
                     self.get_current_scope().add_variable_identifier(parameter);
+                    self.allocate_slot_for_variable(parameter);
                 }
                 self.analyse_statements_collecting_diagnostics(&body.statements);
+                self.pop_frame_and_record_size();
                 self.pop_scope();
                 Ok(())
             }

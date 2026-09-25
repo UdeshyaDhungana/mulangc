@@ -1,50 +1,16 @@
-use std::{collections::HashMap, ops::Deref};
-
 use crate::{
     diagnostics::{Diagnostic, Span},
     syntax::{
         AssignmentTarget, BinaryOperator, Block, Conditional, Else, Expression,
         ExpressionKind::{self},
         Program, Statement, StatementKind, UnaryOperator,
-        sema::NodeIdResolution,
+        sema::{GLOBAL_FRAME_NODE_ID, MemoryUnit, NodeIdResolution},
     },
 };
 
-type MemoryUnit = usize;
 const MEMORY_UNIT_SCALE: usize = 8;
 pub const REQUIRED_STACK_BYTES: usize = 64 * 1024 * 1024;
 const STACK_ALIGNMENT: usize = 16;
-
-struct Frame {
-    capacity_in_bytes: usize,
-    offset_map: HashMap<String, i32>,
-}
-
-impl Frame {
-    fn new(capacity_in_bytes: usize) -> Self {
-        // arm64 requirement
-        if capacity_in_bytes % 16 != 0 {
-            panic!("Frame size must be a multiple of 16");
-        }
-        Self {
-            capacity_in_bytes,
-            offset_map: HashMap::new(),
-        }
-    }
-
-    fn get_next_offset(&self) -> i32 {
-        -i32::try_from(MEMORY_UNIT_SCALE * (1 + self.offset_map.len())).expect("Failed to convert ")
-    }
-
-    fn add_node_id_and_offset(&mut self, node_id: String, offset: i32) {
-        // We assume that each entry will take up one memory unit
-        // which is true for the moment, but will break later when structs are introduced
-        if self.capacity_in_bytes < (self.offset_map.len() * MEMORY_UNIT_SCALE) + 1 {
-            panic!("Adding more entries to frame will exceed its capacity");
-        }
-        self.offset_map.insert(node_id, offset);
-    }
-}
 
 #[derive(Default)]
 struct Section {
@@ -56,7 +22,7 @@ pub struct CodeGenerator {
 
     // Static scoping
     resolution: NodeIdResolution,
-    static_frames: Vec<Frame>,
+    current_depth: usize,
 
     // For generating different text sections during codegen
     text_section_stack: Vec<Section>,
@@ -67,7 +33,7 @@ impl CodeGenerator {
     pub fn new(resolution: NodeIdResolution, output_file: &str) -> Self {
         Self {
             output_file: output_file.to_string(),
-            static_frames: Vec::new(),
+            current_depth: 0,
             text_section_stack: vec![Default::default()],
             registered_text_sections: Vec::new(),
             resolution: resolution,
@@ -87,45 +53,42 @@ impl CodeGenerator {
             .push(self.text_section_stack.pop().unwrap())
     }
 
-    fn get_current_frame(&mut self) -> &mut Frame {
-        self.static_frames.last_mut().unwrap()
+    fn get_frame_size_in_bytes(&self, frame_id: &str) -> usize {
+        let size = self
+            .resolution
+            .frame_sizes
+            .get(frame_id)
+            .unwrap_or_else(|| panic!("CODEGEN:: No frame size recorded for {frame_id}"));
+        translate_memory_units_to_bytes(*size)
     }
 
-    fn get_frame_pointer_offset_for_node_id(&self, resolved_node_id: &String) -> i32 {
-        let mut sum_of_frame_sizes = 0;
+    fn get_frame_pointer_offset_for_node_id(&self, declaration_node_id: &String) -> i32 {
+        let location = self
+            .resolution
+            .variable_locations
+            .get(declaration_node_id)
+            .unwrap_or_else(|| {
+                panic!("CODEGEN:: No location recorded for node with id {declaration_node_id}")
+            });
 
-        for (idx, frame) in self.static_frames.iter().rev().enumerate() {
-            if idx != 0 {
-                sum_of_frame_sizes += 16 + frame.capacity_in_bytes;
-            }
-
-            if let Some(local_offset) = frame.offset_map.get(resolved_node_id) {
-                return TryInto::<i32>::try_into(sum_of_frame_sizes).unwrap() + local_offset;
-            }
+        if location.depth != self.current_depth {
+            todo!("static links");
         }
 
-        panic!("CODEGEN:: No frame contains node with id {resolved_node_id}");
+        translate_slot_to_frame_pointer_offset(location.offset)
     }
 
-    fn push_frame_and_emit_assembly(&mut self, frame: Frame) {
-        let frame_capacity = frame.capacity_in_bytes;
-        self.static_frames.push(frame);
+    fn push_frame_and_emit_assembly(&mut self, frame_size_in_bytes: usize) {
+        if frame_size_in_bytes % STACK_ALIGNMENT != 0 {
+            panic!("Frame size must be a multiple of 16");
+        }
         self.emit_line("stp x29, x30, [sp, #-16]!");
         self.emit_line("mov x29, sp");
 
-        if frame_capacity > 0 {
-            self.emit_line(format!("sub sp, sp, #{frame_capacity}").as_str());
+        if frame_size_in_bytes > 0 {
+            self.emit_line(format!("sub sp, sp, #{frame_size_in_bytes}").as_str());
         }
         self.emit_newline();
-    }
-
-    fn pop_frame_and_emit_release_assembly(&mut self) {
-        self.pop_frame();
-        self.emit_frame_release_assembly();
-    }
-
-    fn pop_frame(&mut self) {
-        self.static_frames.pop();
     }
 
     fn emit_frame_release_assembly(&mut self) {
@@ -207,9 +170,7 @@ impl CodeGenerator {
         self.emit_outer_level_line(".p2align 2");
         self.emit_outer_level_line("_main:");
 
-        self.push_frame_and_emit_assembly(Frame::new(frame_size_for_block_in_bytes(
-            &program.block,
-        )));
+        self.push_frame_and_emit_assembly(self.get_frame_size_in_bytes(GLOBAL_FRAME_NODE_ID));
 
         for statement in &program.block.statements {
             self.emit_statement_assembly(statement)?;
@@ -218,7 +179,7 @@ impl CodeGenerator {
         // return 0;
         // later on we should change this once we get to exit codes
         self.emit_line("mov x0, #0");
-        self.pop_frame_and_emit_release_assembly();
+        self.emit_frame_release_assembly();
         self.emit_line("ret");
         self.end_and_register_current_text_section();
 
@@ -228,14 +189,11 @@ impl CodeGenerator {
     fn emit_statement_assembly(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
         match &statement.kind {
             StatementKind::Declaration { identifier, value } => {
-                let next_offset = self.get_current_frame().get_next_offset();
-
-                self.get_current_frame()
-                    .add_node_id_and_offset(identifier.node_id.clone(), next_offset);
+                let offset = self.get_frame_pointer_offset_for_node_id(&identifier.node_id);
 
                 self.emit_expression_evaluation_assembly_and_push_evaluated(value)?;
                 self.pop_to_xn(0);
-                self.emit_line(&format!("str x0, [x29, #{next_offset}]"));
+                self.emit_line(&format!("str x0, [x29, #{offset}]"));
                 self.emit_newline();
                 Ok(())
             }
@@ -265,17 +223,13 @@ impl CodeGenerator {
                     self.emit_line("mov x9, sp");
                 }
 
-                // TODO: Currently, we assume that each parameter occupies one byte
-                // This assumption won't hold valid when we add structs
-                self.push_frame_and_emit_assembly(Frame::new(
-                    frame_size_for_block_in_bytes(&definition.body)
-                        + translate_memory_units_to_bytes(definition.parameters.len()),
-                ));
+                self.current_depth += 1;
+                self.push_frame_and_emit_assembly(
+                    self.get_frame_size_in_bytes(&definition.identifier.node_id),
+                );
 
                 for (idx, parameter) in definition.parameters.iter().enumerate() {
-                    let next_offset = self.get_current_frame().get_next_offset();
-                    self.get_current_frame()
-                        .add_node_id_and_offset(parameter.node_id.clone(), next_offset);
+                    let next_offset = self.get_frame_pointer_offset_for_node_id(&parameter.node_id);
 
                     // The first 8 arguments live on x0..x7, the rest live on the stack in increasing order
                     if idx < 8 {
@@ -299,11 +253,11 @@ impl CodeGenerator {
                 // Return void if a function doesn't contain a return statement
                 if !has_return {
                     self.emit_line("mov x0, #0");
-                    self.pop_frame_and_emit_release_assembly();
+                    self.emit_frame_release_assembly();
                     self.emit_line("ret");
                 }
 
-                self.pop_frame();
+                self.current_depth -= 1;
                 self.end_and_register_current_text_section();
                 Ok(())
             }
@@ -533,7 +487,7 @@ impl CodeGenerator {
         self.emit_outer_level_line("_debug_bol:");
 
         // Could use a frame here, but not necessary for a builtin
-        self.push_frame_and_emit_assembly(Frame::new(16));
+        self.push_frame_and_emit_assembly(16);
 
         // because printf expects arguments on the stack
         self.emit_line("str x0, [sp]");
@@ -541,7 +495,7 @@ impl CodeGenerator {
         self.emit_line("add x0, x0, Lfmt_integer@PAGEOFF");
         self.emit_line("bl _printf");
 
-        self.pop_frame_and_emit_release_assembly();
+        self.emit_frame_release_assembly();
 
         self.emit_line("ret");
         self.emit_newline();
@@ -573,56 +527,10 @@ impl CodeGenerator {
     }
 }
 
-fn frame_size_for_block_in_bytes(block: &Block) -> usize {
-    return translate_memory_units_to_bytes(memory_units_occupied_by_block(block));
-}
-
 fn translate_memory_units_to_bytes(m: MemoryUnit) -> usize {
     return (m * MEMORY_UNIT_SCALE).div_ceil(STACK_ALIGNMENT) * STACK_ALIGNMENT;
 }
 
-// memory_units_occupied_by will give the total size of the given block
-// in memory units.
-// It'll walk the tree recursively, ignoring function definitions, and
-fn memory_units_occupied_by_block(block: &Block) -> MemoryUnit {
-    let mut total = 0;
-    for stmt in &block.statements {
-        total += memory_units_occupied_by_statement(stmt);
-    }
-    total
-}
-
-fn memory_units_occupied_by_statement(statement: &Statement) -> MemoryUnit {
-    let mut total: usize = 0;
-    match &statement.kind {
-        StatementKind::Declaration { .. } => {
-            total += 1;
-        }
-        StatementKind::If(conditional) => {
-            total += memory_units_occupied_by_conditional(conditional);
-        }
-        StatementKind::While { body, .. } => total += memory_units_occupied_by_block(body),
-        StatementKind::For {
-            initialiser, body, ..
-        } => {
-            if let Some(initialiser) = initialiser {
-                total += memory_units_occupied_by_statement(initialiser.deref());
-            }
-            total += memory_units_occupied_by_block(body);
-        }
-        _ => {}
-    }
-    total
-}
-
-fn memory_units_occupied_by_conditional(conditional: &Conditional) -> MemoryUnit {
-    let mut total: MemoryUnit = 0;
-    total += memory_units_occupied_by_block(&conditional.then);
-    if let Some(otherwise) = &conditional.otherwise {
-        match otherwise.deref() {
-            Else::Block(block) => total += memory_units_occupied_by_block(block),
-            Else::If(conditional) => total += memory_units_occupied_by_conditional(conditional),
-        }
-    }
-    total
+fn translate_slot_to_frame_pointer_offset(slot: MemoryUnit) -> i32 {
+    -i32::try_from(MEMORY_UNIT_SCALE * (slot + 1)).expect("Failed to convert slot to offset")
 }
