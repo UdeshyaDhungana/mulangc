@@ -5,7 +5,7 @@ use crate::{
         ExpressionKind::{self},
         Program, Statement, StatementKind, UnaryOperator,
         sema::{
-            FunctionLocation, IdentifierLocation, MAIN_FUNCTION, MemoryUnit, Resolution,
+            Analysis, FunctionLocation, IdentifierLocation, MAIN_FUNCTION, MemoryUnit,
             STATIC_LINK_SLOT, VariableLocation,
         },
     },
@@ -24,7 +24,7 @@ pub struct CodeGenerator {
     output_file: String,
 
     // Static scoping
-    resolution: Resolution,
+    analysis: Analysis,
     current_depth: usize,
 
     // For generating different text sections during codegen
@@ -33,13 +33,13 @@ pub struct CodeGenerator {
 }
 
 impl CodeGenerator {
-    pub fn new(resolution: Resolution, output_file: &str) -> Self {
+    pub fn new(resolution: Analysis, output_file: &str) -> Self {
         Self {
             output_file: output_file.to_string(),
             current_depth: 0,
             text_section_stack: vec![Default::default()],
             registered_text_sections: Vec::new(),
-            resolution: resolution,
+            analysis: resolution,
         }
     }
 
@@ -57,18 +57,14 @@ impl CodeGenerator {
     }
 
     fn get_function_location(&self, function_node_id: &str) -> &FunctionLocation {
-        match self.resolution.identifier_locations.get(function_node_id) {
+        match self.analysis.node_id_locations.get(function_node_id) {
             Some(IdentifierLocation::Function(location)) => location,
             _ => panic!("CODEGEN:: No function location recorded for {function_node_id}"),
         }
     }
 
     fn get_variable_location(&self, declaration_node_id: &str) -> &VariableLocation {
-        match self
-            .resolution
-            .identifier_locations
-            .get(declaration_node_id)
-        {
+        match self.analysis.node_id_locations.get(declaration_node_id) {
             Some(IdentifierLocation::Variable(location)) => location,
             _ => panic!("CODEGEN:: No variable location recorded for {declaration_node_id}"),
         }
@@ -390,7 +386,7 @@ impl CodeGenerator {
     ) -> Result<(), Diagnostic> {
         match &expression.kind {
             ExpressionKind::Identifier(identifier) => {
-                let resolved_node_id = &self.resolution.resolve(&identifier.node_id);
+                let resolved_node_id = &self.analysis.resolve(&identifier.node_id);
                 let (frame_pointer, offset) =
                     self.get_frame_pointer_offset_for_node_id(resolved_node_id, 0);
                 self.emit_line(&format!("ldr x0, [{frame_pointer}, #{offset}]"));
@@ -470,7 +466,7 @@ impl CodeGenerator {
                 self.pop_to_xn(1);
 
                 let AssignmentTarget::Variable(identifier) = target;
-                let resolved_node_id = self.resolution.resolve(&identifier.node_id);
+                let resolved_node_id = self.analysis.resolve(&identifier.node_id);
 
                 let (frame_pointer, offset) =
                     self.get_frame_pointer_offset_for_node_id(&resolved_node_id, 2);
@@ -497,7 +493,7 @@ impl CodeGenerator {
                     self.emit_line(&format!("ldr {register}, [sp], #16"));
                 }
 
-                let node_id = self.resolution.resolve(&callee.node_id);
+                let node_id = self.analysis.resolve(&callee.node_id);
 
                 // Static links
                 // If I'm the parent, I store in x15 my own x29(fp)

@@ -25,10 +25,10 @@ enum SymbolInfo {
     Variable(Identifier),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 enum ScopeType {
-    Global,
-    Function,
+    Global { frame_id: String, size: MemoryUnit },
+    Function { frame_id: String, size: MemoryUnit },
     Block,
 }
 
@@ -98,23 +98,23 @@ pub enum IdentifierLocation {
 }
 
 #[derive(Debug)]
-pub struct Resolution {
-    pub node_id_resolution_map: HashMap<String, String>,
-    pub identifier_locations: HashMap<String, IdentifierLocation>,
+pub struct Analysis {
+    pub use_site_node_id_resolution_map: HashMap<String, String>,
+    pub node_id_locations: HashMap<String, IdentifierLocation>,
 }
 
-impl Default for Resolution {
+impl Default for Analysis {
     fn default() -> Self {
         Self {
-            node_id_resolution_map: HashMap::new(),
-            identifier_locations: HashMap::new(),
+            use_site_node_id_resolution_map: HashMap::new(),
+            node_id_locations: HashMap::new(),
         }
     }
 }
 
-impl Resolution {
+impl Analysis {
     pub fn resolve(&self, user_node_id: &String) -> String {
-        self.node_id_resolution_map
+        self.use_site_node_id_resolution_map
             .get(user_node_id)
             .expect("Caller node id must have been resolved")
             .clone()
@@ -128,8 +128,7 @@ struct LookaheadFunctionDefinition {
 
 pub struct Sema {
     scopes_stack: Vec<Scope>,
-    frames_stack: Vec<(String, MemoryUnit)>,
-    resolution: Resolution,
+    analysis: Analysis,
     diagnostics: Vec<Diagnostic>,
     // Functions defined but not yet analysed
     // We keep track of these (names, arity) so that
@@ -147,16 +146,15 @@ impl Sema {
     pub fn new() -> Self {
         Self {
             scopes_stack: Vec::new(),
-            frames_stack: Vec::new(),
             lookahead_function_definitions: Vec::new(),
-            resolution: Default::default(),
+            analysis: Default::default(),
             diagnostics: Vec::new(),
         }
     }
 
     fn get_enclosing_function_scope(&mut self) -> Option<&mut Scope> {
         for scope in self.scopes_stack.iter_mut().rev() {
-            if scope.scope_type == ScopeType::Function {
+            if matches!(scope.scope_type, ScopeType::Function { .. }) {
                 return Some(scope);
             }
         }
@@ -180,38 +178,39 @@ impl Sema {
         None
     }
 
-    fn push_frame(&mut self, frame_id: String) {
-        self.frames_stack.push((frame_id, 1));
+    fn current_frame_mut(&mut self) -> (&String, &mut MemoryUnit) {
+        for scope in self.scopes_stack.iter_mut().rev() {
+            match &mut scope.scope_type {
+                ScopeType::Global { frame_id, size } | ScopeType::Function { frame_id, size } => {
+                    return (frame_id, size);
+                }
+                ScopeType::Block => continue,
+            }
+        }
+        panic!("At least one frame must exist during semantic analysis");
+    }
+
+    fn frame_depth(&self) -> usize {
+        self.scopes_stack
+            .iter()
+            .filter(|scope| !matches!(scope.scope_type, ScopeType::Block))
+            .count()
+            - 1
     }
 
     fn record_frame_location(&mut self, frame_id: String, depth: usize) {
-        self.resolution.identifier_locations.insert(
+        self.analysis.node_id_locations.insert(
             frame_id,
             IdentifierLocation::Function(FunctionLocation { depth, size: 0 }),
         );
     }
 
-    fn pop_frame_and_record_size(&mut self) {
-        let (frame_id, size) = self
-            .frames_stack
-            .pop()
-            .expect("A frame must exist to be popped");
-        if let Some(IdentifierLocation::Function(location)) =
-            self.resolution.identifier_locations.get_mut(&frame_id)
-        {
-            location.size = size;
-        }
-    }
-
     fn allocate_slot_for_variable_to_current_frame(&mut self, identifier: &Identifier) {
-        let depth = self.frames_stack.len() - 1;
-        let (_, size) = self
-            .frames_stack
-            .last_mut()
-            .expect("At least one frame must exist during semantic analysis");
+        let depth = self.frame_depth();
+        let (_, size) = self.current_frame_mut();
         let slot = *size;
         *size += 1;
-        self.resolution.identifier_locations.insert(
+        self.analysis.node_id_locations.insert(
             identifier.node_id.clone(),
             IdentifierLocation::Variable(VariableLocation {
                 depth,
@@ -225,13 +224,25 @@ impl Sema {
     }
 
     fn pop_scope(&mut self) {
-        self.scopes_stack.pop();
+        let scope = self
+            .scopes_stack
+            .pop()
+            .expect("A scope must exist to be popped");
+        if let ScopeType::Global { frame_id, size } | ScopeType::Function { frame_id, size } =
+            scope.scope_type
+            && let Some(IdentifierLocation::Function(location)) =
+                self.analysis.node_id_locations.get_mut(&frame_id)
+        {
+            location.size = size;
+        }
     }
 
-    pub fn analyse(mut self, program: &Program) -> Result<Resolution, Vec<Diagnostic>> {
-        self.scopes_stack.push(Scope::new(ScopeType::Global));
+    pub fn analyse(mut self, program: &Program) -> Result<Analysis, Vec<Diagnostic>> {
         self.record_frame_location(String::from(MAIN_FUNCTION), 0);
-        self.push_frame(String::from(MAIN_FUNCTION));
+        self.push_scope(Scope::new(ScopeType::Global {
+            frame_id: String::from(MAIN_FUNCTION),
+            size: 1,
+        }));
 
         // DEBUG: Just add `bol` builtin so analyzer won't complain
         self.get_current_scope().add_function_identifier_with_arity(
@@ -281,10 +292,10 @@ impl Sema {
         // Pass 2
         // Process the rest of the statements
         self.analyse_statements_collecting_diagnostics(&program.block.statements);
-        self.pop_frame_and_record_size();
+        self.pop_scope();
 
         if self.diagnostics.is_empty() {
-            Ok(self.resolution)
+            Ok(self.analysis)
         } else {
             Err(self.diagnostics)
         }
@@ -293,11 +304,9 @@ impl Sema {
     fn analyse_statements_collecting_diagnostics(&mut self, statements: &[Statement]) {
         for statement in statements {
             let scope_depth_before_statement = self.scopes_stack.len();
-            let frame_depth_before_statement = self.frames_stack.len();
             if let Err(diagnostic) = self.analyse_statement(statement) {
                 self.diagnostics.push(diagnostic);
                 self.scopes_stack.truncate(scope_depth_before_statement);
-                self.frames_stack.truncate(frame_depth_before_statement);
             }
         }
     }
@@ -359,10 +368,12 @@ impl Sema {
                 // We should allow recursive calls, so register early
                 self.get_current_scope()
                     .add_function_identifier_with_arity(identifier, parameters.len());
-                self.record_frame_location(identifier.node_id.clone(), self.frames_stack.len() - 1);
+                self.record_frame_location(identifier.node_id.clone(), self.frame_depth());
 
-                self.push_scope(Scope::new(ScopeType::Function));
-                self.push_frame(identifier.node_id.clone());
+                self.push_scope(Scope::new(ScopeType::Function {
+                    frame_id: identifier.node_id.clone(),
+                    size: 1,
+                }));
                 for parameter in parameters {
                     let parameter_name = parameter.name.clone();
                     // Each parameter identifier must be unique
@@ -379,7 +390,6 @@ impl Sema {
                     self.allocate_slot_for_variable_to_current_frame(parameter);
                 }
                 self.analyse_statements_collecting_diagnostics(&body.statements);
-                self.pop_frame_and_record_size();
                 self.pop_scope();
                 Ok(())
             }
@@ -436,8 +446,8 @@ impl Sema {
                         node_id: resolved_node_id,
                         ..
                     }) => {
-                        self.resolution
-                            .node_id_resolution_map
+                        self.analysis
+                            .use_site_node_id_resolution_map
                             .insert(identifier.node_id.clone(), resolved_node_id.clone());
                         Ok(())
                     }
@@ -473,8 +483,8 @@ impl Sema {
                         node_id: resolved_node_id,
                         ..
                     }) => {
-                        self.resolution
-                            .node_id_resolution_map
+                        self.analysis
+                            .use_site_node_id_resolution_map
                             .insert(identifier.node_id.clone(), resolved_node_id.clone());
                     }
                 }
@@ -513,8 +523,8 @@ impl Sema {
                                 ));
                             }
                             was_callee_resolved_from_scope_stack = true;
-                            self.resolution
-                                .node_id_resolution_map
+                            self.analysis
+                                .use_site_node_id_resolution_map
                                 .insert(callee.node_id.clone(), identifier.node_id.clone());
                         }
                     }
@@ -544,7 +554,7 @@ impl Sema {
                         ));
                     }
                     was_callee_resolved_from_lookahead_definitions = true;
-                    self.resolution.node_id_resolution_map.insert(
+                    self.analysis.use_site_node_id_resolution_map.insert(
                         callee.node_id.clone(),
                         fn_definition.identifier.node_id.clone(),
                     );
@@ -587,7 +597,7 @@ mod tests {
     use super::*;
     use crate::syntax::parse;
 
-    fn analyse(source: &str) -> Result<Resolution, Vec<Diagnostic>> {
+    fn analyse(source: &str) -> Result<Analysis, Vec<Diagnostic>> {
         let program = parse(source)
             .unwrap_or_else(|diagnostics| panic!("should parse: {}", diagnostics[0].message));
         Sema::new().analyse(&program)
