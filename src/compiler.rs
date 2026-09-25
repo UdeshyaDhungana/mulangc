@@ -4,7 +4,7 @@ use crate::{
         AssignmentTarget, BinaryOperator, Block, Conditional, Else, Expression,
         ExpressionKind::{self},
         Program, Statement, StatementKind, UnaryOperator,
-        sema::{GLOBAL_FRAME_NODE_ID, MemoryUnit, NodeIdResolution},
+        sema::{GLOBAL_FRAME_NODE_ID, MemoryUnit, Resolution},
     },
 };
 
@@ -21,7 +21,7 @@ pub struct CodeGenerator {
     output_file: String,
 
     // Static scoping
-    resolution: NodeIdResolution,
+    resolution: Resolution,
     current_depth: usize,
 
     // For generating different text sections during codegen
@@ -30,7 +30,7 @@ pub struct CodeGenerator {
 }
 
 impl CodeGenerator {
-    pub fn new(resolution: NodeIdResolution, output_file: &str) -> Self {
+    pub fn new(resolution: Resolution, output_file: &str) -> Self {
         Self {
             output_file: output_file.to_string(),
             current_depth: 0,

@@ -84,8 +84,8 @@ pub struct VariableLocation {
 }
 
 #[derive(Debug)]
-pub struct NodeIdResolution {
-    pub map: HashMap<String, String>,
+pub struct Resolution {
+    pub node_id_resolution_map: HashMap<String, String>,
     pub variable_locations: HashMap<String, VariableLocation>,
     // Keyed by frame id, which is the node id of the function to which
     // that frame belongs to
@@ -93,19 +93,19 @@ pub struct NodeIdResolution {
     pub frame_sizes: HashMap<String, MemoryUnit>,
 }
 
-impl Default for NodeIdResolution {
+impl Default for Resolution {
     fn default() -> Self {
         Self {
-            map: HashMap::new(),
+            node_id_resolution_map: HashMap::new(),
             variable_locations: HashMap::new(),
             frame_sizes: HashMap::new(),
         }
     }
 }
 
-impl NodeIdResolution {
+impl Resolution {
     pub fn resolve(&self, user_node_id: &String) -> String {
-        self.map
+        self.node_id_resolution_map
             .get(user_node_id)
             .expect("Caller node id must have been resolved")
             .clone()
@@ -120,7 +120,7 @@ struct LookaheadFunctionDefinition {
 pub struct Sema {
     scopes_stack: Vec<Scope>,
     frames_stack: Vec<(String, MemoryUnit)>,
-    resolution: NodeIdResolution,
+    resolution: Resolution,
     diagnostics: Vec<Diagnostic>,
     // Functions defined but not yet analysed
     // We keep track of these (names, arity) so that
@@ -208,7 +208,7 @@ impl Sema {
         self.scopes_stack.pop();
     }
 
-    pub fn analyse(mut self, program: &Program) -> Result<NodeIdResolution, Vec<Diagnostic>> {
+    pub fn analyse(mut self, program: &Program) -> Result<Resolution, Vec<Diagnostic>> {
         self.scopes_stack.push(Scope::new(ScopeType::Global));
         self.push_frame(String::from(GLOBAL_FRAME_NODE_ID));
 
@@ -414,7 +414,7 @@ impl Sema {
                         ..
                     }) => {
                         self.resolution
-                            .map
+                            .node_id_resolution_map
                             .insert(identifier.node_id.clone(), resolved_node_id.clone());
                         Ok(())
                     }
@@ -451,7 +451,7 @@ impl Sema {
                         ..
                     }) => {
                         self.resolution
-                            .map
+                            .node_id_resolution_map
                             .insert(identifier.node_id.clone(), resolved_node_id.clone());
                     }
                 }
@@ -491,7 +491,7 @@ impl Sema {
                             }
                             was_callee_resolved_from_scope_stack = true;
                             self.resolution
-                                .map
+                                .node_id_resolution_map
                                 .insert(callee.node_id.clone(), identifier.node_id.clone());
                         }
                     }
@@ -521,7 +521,7 @@ impl Sema {
                         ));
                     }
                     was_callee_resolved_from_lookahead_definitions = true;
-                    self.resolution.map.insert(
+                    self.resolution.node_id_resolution_map.insert(
                         callee.node_id.clone(),
                         fn_definition.identifier.node_id.clone(),
                     );
@@ -564,7 +564,7 @@ mod tests {
     use super::*;
     use crate::syntax::parse;
 
-    fn analyse(source: &str) -> Result<NodeIdResolution, Vec<Diagnostic>> {
+    fn analyse(source: &str) -> Result<Resolution, Vec<Diagnostic>> {
         let program = parse(source)
             .unwrap_or_else(|diagnostics| panic!("should parse: {}", diagnostics[0].message));
         Sema::new().analyse(&program)
