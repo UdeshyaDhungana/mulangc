@@ -27,7 +27,6 @@ enum SymbolInfo {
 
 #[derive(Debug)]
 enum ScopeType {
-    Global { frame_id: String, size: MemoryUnit },
     Function { frame_id: String, size: MemoryUnit },
     Block,
 }
@@ -152,15 +151,6 @@ impl Sema {
         }
     }
 
-    fn get_enclosing_function_scope(&mut self) -> Option<&mut Scope> {
-        for scope in self.scopes_stack.iter_mut().rev() {
-            if matches!(scope.scope_type, ScopeType::Function { .. }) {
-                return Some(scope);
-            }
-        }
-        None
-    }
-
     fn get_current_scope(&mut self) -> &mut Scope {
         self.scopes_stack
             .last_mut()
@@ -181,7 +171,7 @@ impl Sema {
     fn current_frame_mut(&mut self) -> (&String, &mut MemoryUnit) {
         for scope in self.scopes_stack.iter_mut().rev() {
             match &mut scope.scope_type {
-                ScopeType::Global { frame_id, size } | ScopeType::Function { frame_id, size } => {
+                ScopeType::Function { frame_id, size } => {
                     return (frame_id, size);
                 }
                 ScopeType::Block => continue,
@@ -228,8 +218,7 @@ impl Sema {
             .scopes_stack
             .pop()
             .expect("A scope must exist to be popped");
-        if let ScopeType::Global { frame_id, size } | ScopeType::Function { frame_id, size } =
-            scope.scope_type
+        if let ScopeType::Function { frame_id, size } = scope.scope_type
             && let Some(IdentifierLocation::Function(location)) =
                 self.analysis.node_id_locations.get_mut(&frame_id)
         {
@@ -239,7 +228,7 @@ impl Sema {
 
     pub fn analyse(mut self, ast: &AST) -> Result<Analysis, Vec<Diagnostic>> {
         self.record_frame_location(String::from(MAIN_FUNCTION), 0);
-        self.push_scope(Scope::new(ScopeType::Global {
+        self.push_scope(Scope::new(ScopeType::Function {
             frame_id: String::from(MAIN_FUNCTION),
             size: 1,
         }));
@@ -339,12 +328,12 @@ impl Sema {
                 Ok(())
             }
             StatementKind::Return(expression) => {
-                let Some(_) = self.get_enclosing_function_scope() else {
+                if self.frame_depth() == 0 {
                     return Err(Diagnostic::error(
                         expression.span,
                         "`de` should be inside a `dhanda`",
                     ));
-                };
+                }
 
                 self.analyse_expression(expression)
             }
