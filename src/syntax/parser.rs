@@ -19,7 +19,7 @@ enum Precedence {
     Call,
 }
 
-pub fn parse(tokens: &[SpannedToken]) -> Result<Program, Vec<Diagnostic>> {
+pub fn parse(tokens: &[SpannedToken]) -> Result<AST, Vec<Diagnostic>> {
     let mut parser = Parser {
         tokens,
         position: 0,
@@ -33,7 +33,7 @@ pub fn parse(tokens: &[SpannedToken]) -> Result<Program, Vec<Diagnostic>> {
             (Some(first), Some(last)) => first.span.joined_with(last.span),
             _ => Span::new(0, 0),
         };
-        Ok(Program {
+        Ok(AST {
             block: Block { statements, span },
         })
     } else {

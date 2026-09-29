@@ -1,9 +1,9 @@
 use crate::{
     diagnostics::{Diagnostic, Span},
     syntax::{
-        AssignmentTarget, BinaryOperator, Block, Conditional, Else, Expression,
+        AST, AssignmentTarget, BinaryOperator, Block, Conditional, Else, Expression,
         ExpressionKind::{self},
-        Program, Statement, StatementKind, UnaryOperator,
+        Statement, StatementKind, UnaryOperator,
         sema::{
             Analysis, FunctionLocation, IdentifierLocation, MAIN_FUNCTION, MemoryUnit,
             STATIC_LINK_SLOT, VariableLocation,
@@ -33,13 +33,13 @@ pub struct CodeGenerator {
 }
 
 impl CodeGenerator {
-    pub fn new(resolution: Analysis, output_file: &str) -> Self {
+    pub fn new(analysis: Analysis, output_file: &str) -> Self {
         Self {
             output_file: output_file.to_string(),
             current_depth: 0,
             text_section_stack: vec![Default::default()],
             registered_text_sections: Vec::new(),
-            analysis: resolution,
+            analysis,
         }
     }
 
@@ -186,7 +186,7 @@ impl CodeGenerator {
         self.emit_line("add sp, sp, #16");
     }
 
-    pub fn generate(&mut self, program: &Program) -> Result<(), Diagnostic> {
+    pub fn generate(&mut self, ast: &AST) -> Result<(), Diagnostic> {
         self.begin_new_text_section();
         self.emit_preamble();
 
@@ -199,7 +199,7 @@ impl CodeGenerator {
 
         self.push_frame_and_emit_assembly(self.get_frame_size_in_bytes(MAIN_FUNCTION));
 
-        for statement in &program.block.statements {
+        for statement in &ast.block.statements {
             self.emit_statement_assembly(statement)?;
         }
 

@@ -5,13 +5,13 @@ pub mod sema;
 mod token;
 
 pub use ast::{
-    AssignmentTarget, BinaryOperator, Block, Conditional, Else, Expression, ExpressionKind,
-    FunctionDefinition, Identifier, Program, Statement, StatementKind, UnaryOperator,
+    AST, AssignmentTarget, BinaryOperator, Block, Conditional, Else, Expression, ExpressionKind,
+    FunctionDefinition, Identifier, Statement, StatementKind, UnaryOperator,
 };
 
 use crate::diagnostics::Diagnostic;
 
-pub fn parse(source: &str) -> Result<Program, Vec<Diagnostic>> {
+pub fn parse(source: &str) -> Result<AST, Vec<Diagnostic>> {
     let tokens = lexer::tokenize(source)?;
     parser::parse(&tokens)
 }
@@ -106,10 +106,10 @@ mod tests {
 
     #[test]
     fn a_natra_yedi_arm_nests_rather_than_flattening() {
-        let program =
+        let ast =
             parse("yedi (a) { 1; } natra yedi (b) { 2; } natra { 3; }").expect("should parse");
 
-        let StatementKind::If(outer) = &program.block.statements[0].kind else {
+        let StatementKind::If(outer) = &ast.block.statements[0].kind else {
             panic!("expected an if statement");
         };
         let Some(Else::If(middle)) = outer.otherwise.as_deref() else {
@@ -169,15 +169,15 @@ mod tests {
 
     #[test]
     fn a_conditional_is_never_the_callee_of_a_call() {
-        let program = parse("yedi (a) { 1; } (2);").expect("should parse");
+        let ast = parse("yedi (a) { 1; } (2);").expect("should parse");
 
-        assert_eq!(program.block.statements.len(), 2);
+        assert_eq!(ast.block.statements.len(), 2);
         assert!(matches!(
-            program.block.statements[0].kind,
+            ast.block.statements[0].kind,
             StatementKind::If(..)
         ));
         assert!(matches!(
-            program.block.statements[1].kind,
+            ast.block.statements[1].kind,
             StatementKind::Expression(..)
         ));
     }

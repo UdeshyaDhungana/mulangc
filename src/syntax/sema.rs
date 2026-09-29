@@ -4,8 +4,8 @@ use std::{collections::HashMap, ops::Deref};
 use crate::{
     diagnostics::{Diagnostic, Span},
     syntax::{
-        AssignmentTarget, Block, Conditional, Else, Expression, ExpressionKind, FunctionDefinition,
-        Identifier, Program, Statement, StatementKind,
+        AST, AssignmentTarget, Block, Conditional, Else, Expression, ExpressionKind,
+        FunctionDefinition, Identifier, Statement, StatementKind,
     },
 };
 
@@ -237,7 +237,7 @@ impl Sema {
         }
     }
 
-    pub fn analyse(mut self, program: &Program) -> Result<Analysis, Vec<Diagnostic>> {
+    pub fn analyse(mut self, ast: &AST) -> Result<Analysis, Vec<Diagnostic>> {
         self.record_frame_location(String::from(MAIN_FUNCTION), 0);
         self.push_scope(Scope::new(ScopeType::Global {
             frame_id: String::from(MAIN_FUNCTION),
@@ -258,7 +258,7 @@ impl Sema {
 
         // Pass 1
         // Process functions signatures first, so functions can be used before their definitions are set in
-        for statement in &program.block.statements {
+        for statement in &ast.block.statements {
             match &statement.kind {
                 StatementKind::Function(FunctionDefinition {
                     identifier,
@@ -291,7 +291,7 @@ impl Sema {
 
         // Pass 2
         // Process the rest of the statements
-        self.analyse_statements_collecting_diagnostics(&program.block.statements);
+        self.analyse_statements_collecting_diagnostics(&ast.block.statements);
         self.pop_scope();
 
         if self.diagnostics.is_empty() {
@@ -598,9 +598,9 @@ mod tests {
     use crate::syntax::parse;
 
     fn analyse(source: &str) -> Result<Analysis, Vec<Diagnostic>> {
-        let program = parse(source)
+        let ast = parse(source)
             .unwrap_or_else(|diagnostics| panic!("should parse: {}", diagnostics[0].message));
-        Sema::new().analyse(&program)
+        Sema::new().analyse(&ast)
     }
 
     fn accepts(source: &str) {

@@ -42,9 +42,9 @@ fn compile_file(path: &str) -> ExitCode {
         }
     };
 
-    // Intermediate representation
-    let program = match syntax::parse(&source) {
-        Ok(program) => program,
+    // AST
+    let ast = match syntax::parse(&source) {
+        Ok(ast) => ast,
         Err(diagnostics) => {
             eprint!("{}", render_all(&diagnostics, &source, path));
             return ExitCode::FAILURE;
@@ -68,15 +68,15 @@ fn compile_file(path: &str) -> ExitCode {
 
     let sema = Sema::new();
 
-    match sema.analyse(&program) {
+    match sema.analyse(&ast) {
         Err(diagnostics) => {
             eprint!("{}", render_all(&diagnostics, &source, path));
             ExitCode::FAILURE
         }
-        Ok(resolution) => {
-            let mut code_generator = CodeGenerator::new(resolution, file_name_without_extension);
+        Ok(analysis) => {
+            let mut code_generator = CodeGenerator::new(analysis, file_name_without_extension);
 
-            match code_generator.generate(&program) {
+            match code_generator.generate(&ast) {
                 Ok(_) => ExitCode::SUCCESS,
                 Err(diagnostic) => {
                     eprint!("{}", diagnostic.render(&source, path));
