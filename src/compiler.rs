@@ -576,9 +576,11 @@ impl CodeGenerator {
 }
 
 fn translate_memory_units_to_bytes(m: MemoryUnit) -> usize {
+    let m = usize::try_from(m).expect("Memory units must be non-negative");
     return (m * MEMORY_UNIT_SCALE).div_ceil(STACK_ALIGNMENT) * STACK_ALIGNMENT;
 }
 
 fn translate_slot_to_frame_pointer_offset(slot: MemoryUnit) -> i32 {
+    let slot = usize::try_from(slot).expect("Slots must be non-negative");
     -i32::try_from(MEMORY_UNIT_SCALE * (slot + 1)).expect("Failed to convert slot to offset")
 }

@@ -9,7 +9,7 @@ use crate::{
     },
 };
 
-pub type MemoryUnit = usize;
+pub type MemoryUnit = i64;
 
 pub const MAIN_FUNCTION: &str = "_main";
 
