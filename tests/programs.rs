@@ -6,7 +6,9 @@
 //! :END SECTION
 
 //! End-to-end tests: compile each program in `tests/programs`, assemble it,
-//! run it, and compare what it printed against the matching `.out` file.
+//! run it, and compare what it printed against the matching `.out` file. Each
+//! program is also run through the IR interpreter (`--ir`) and held to the
+//! same `.out`.
 //!
 //! Every program gets its own scratch directory under `target/muji-tests`,
 //! because the compiler writes `{stem}.s` relative to the working directory
@@ -151,8 +153,10 @@ fn relative_name(source: &Path) -> String {
         .to_owned()
 }
 
-/// Compile, assemble, run, compare. The `Err` is a human-readable report of
-/// the first stage that went wrong.
+/// Check the program through both backends — native (compile, assemble, run)
+/// and the IR interpreter (`--ir`) — against the same `.out` and `.exit`. The
+/// `Err` reports the first stage that went wrong in each backend that failed,
+/// so a broken interpreter never hides a broken code generator or vice versa.
 fn run_one(source: &Path) -> Result<(), String> {
     let name = source
         .file_stem()
@@ -162,40 +166,76 @@ fn run_one(source: &Path) -> Result<(), String> {
     // `functions/recursion` reads better in a failure report than `recursion`,
     // and keeps two same-named programs in different groups apart.
     let reported_as = relative_name(source);
-    let report = |stage: &str, detail: String| format!("  {reported_as}: {stage}\n{detail}");
 
     let scratch = prepare_scratch_directory(&reported_as.replace('/', "_"), source, name);
 
-    let compiled = run_in(&scratch, COMPILER, &[&format!("{name}.muji")]);
+    let failures: Vec<String> = [
+        run_native(source, &scratch, name)
+            .map_err(|(stage, detail)| format!("  {reported_as} [native]: {stage}\n{detail}")),
+        run_ir(source, &scratch, name)
+            .map_err(|(stage, detail)| format!("  {reported_as} [ir]: {stage}\n{detail}")),
+    ]
+    .into_iter()
+    .filter_map(Result::err)
+    .collect();
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.concat())
+    }
+}
+
+/// Compile to assembly, assemble with `clang`, run the binary, compare.
+fn run_native(source: &Path, scratch: &Path, name: &str) -> Result<(), (String, String)> {
+    let compiled = run_in(scratch, COMPILER, &[&format!("{name}.muji")]);
     if !compiled.status.success() {
-        return Err(report("failed to compile", indent(&stderr_of(&compiled))));
+        return Err(("failed to compile".into(), indent(&stderr_of(&compiled))));
     }
 
-    let assembled = run_in(&scratch, "clang", &["-g", "-o", name, &format!("{name}.s")]);
+    let assembled = run_in(scratch, "clang", &["-g", "-o", name, &format!("{name}.s")]);
     if !assembled.status.success() {
-        return Err(report("failed to assemble", indent(&stderr_of(&assembled))));
+        return Err(("failed to assemble".into(), indent(&stderr_of(&assembled))));
     }
 
-    let (actual_output, actual_exit) = match run_with_timeout(&scratch, name) {
-        Ok(result) => result,
-        Err(detail) => return Err(report("did not terminate", indent(&detail))),
+    let result = run_with_timeout(scratch, "native", &format!("./{name}"), &[])
+        .map_err(|detail| ("did not terminate".to_string(), indent(&detail)))?;
+
+    compare(source, result)
+}
+
+/// Run the program through the IR interpreter, compare.
+fn run_ir(source: &Path, scratch: &Path, name: &str) -> Result<(), (String, String)> {
+    let result = run_with_timeout(scratch, "ir", COMPILER, &["--ir", &format!("{name}.muji")])
+        .map_err(|detail| ("did not terminate".to_string(), indent(&detail)))?;
+
+    compare(source, result)
+}
+
+/// Hold a finished run up against the program's `.out` and `.exit`. stderr is
+/// only shown on failure — for the interpreter it is where a panic lands.
+fn compare(source: &Path, (actual_output, actual_exit, stderr): (String, i32, String)) -> Result<(), (String, String)> {
+    let stderr_note = if stderr.is_empty() {
+        String::new()
+    } else {
+        format!("    stderr:\n{}", indent(&indent(&stderr)))
     };
 
     let expected_output = expected_stdout(source);
 
     if actual_output != expected_output {
-        return Err(report(
-            "printed the wrong thing",
-            difference(&expected_output, &actual_output),
+        return Err((
+            "printed the wrong thing".into(),
+            difference(&expected_output, &actual_output) + &stderr_note,
         ));
     }
 
     let expected_exit = expected_exit_code(source);
 
     if actual_exit != expected_exit {
-        return Err(report(
-            "exited with the wrong code",
-            format!("    expected {expected_exit}, got {actual_exit}\n"),
+        return Err((
+            "exited with the wrong code".into(),
+            format!("    expected {expected_exit}, got {actual_exit}\n") + &stderr_note,
         ));
     }
 
@@ -218,21 +258,31 @@ fn prepare_scratch_directory(directory_name: &str, source: &Path, stem: &str) ->
     scratch
 }
 
-/// Run the compiled program, giving up after [`RUN_TIMEOUT`]. Returns its
-/// stdout and exit code.
+/// Run a program, giving up after [`RUN_TIMEOUT`]. Returns its stdout, exit
+/// code, and stderr. `label` keeps the output files of the two backends apart
+/// in the shared scratch directory.
 ///
-/// stdout goes to a file rather than a pipe: a pipe's buffer can fill while we
-/// are still waiting, which would deadlock the very case this exists to catch.
-fn run_with_timeout(directory: &Path, name: &str) -> Result<(String, i32), String> {
-    let stdout_path = directory.join("stdout.txt");
+/// stdout and stderr go to files rather than pipes: a pipe's buffer can fill
+/// while we are still waiting, which would deadlock the very case this exists
+/// to catch.
+fn run_with_timeout(
+    directory: &Path,
+    label: &str,
+    program: &str,
+    arguments: &[&str],
+) -> Result<(String, i32, String), String> {
+    let stdout_path = directory.join(format!("{label}.stdout.txt"));
     let stdout_file = fs::File::create(&stdout_path).expect("cannot create stdout file");
+    let stderr_path = directory.join(format!("{label}.stderr.txt"));
+    let stderr_file = fs::File::create(&stderr_path).expect("cannot create stderr file");
 
-    let mut child = Command::new(format!("./{name}"))
+    let mut child = Command::new(program)
+        .args(arguments)
         .current_dir(directory)
         .stdout(Stdio::from(stdout_file))
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(stderr_file))
         .spawn()
-        .unwrap_or_else(|error| panic!("cannot run {name}: {error}"));
+        .unwrap_or_else(|error| panic!("cannot run {program}: {error}"));
 
     let deadline = Instant::now() + RUN_TIMEOUT;
 
@@ -240,7 +290,8 @@ fn run_with_timeout(directory: &Path, name: &str) -> Result<(String, i32), Strin
         match child.try_wait().expect("cannot poll the running program") {
             Some(status) => {
                 let output = fs::read_to_string(&stdout_path).unwrap_or_default();
-                return Ok((output, status.code().unwrap_or(-1)));
+                let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+                return Ok((output, status.code().unwrap_or(-1), stderr));
             }
             None if Instant::now() >= deadline => {
                 let _ = child.kill();

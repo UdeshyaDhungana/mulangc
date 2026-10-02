@@ -5,16 +5,37 @@ use std::thread;
 
 use mulang::compiler::{CodeGenerator, REQUIRED_STACK_BYTES};
 use mulang::diagnostics::render_all;
+use mulang::ir::instructions::format_program;
+use mulang::ir::interpreter::IRInterpreter;
+use mulang::ir::lowering::Lowerer;
 use mulang::syntax;
 use mulang::syntax::sema::Sema;
+
+enum Mode {
+    // AST -> assembly
+    Assemble,
+    // AST -> IR -> interpreter
+    InterpretIR,
+    // AST -> IR -> .irmu text file
+    EmitIRText,
+}
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
 
     let work = move || match arguments.as_slice() {
-        [path] => compile_file(path),
+        [path] => compile_file(path, Mode::Assemble),
+        [flag, path] if flag == "--ir" => compile_file(path, Mode::InterpretIR),
+        [first, second, path]
+            if matches!(
+                (first.as_str(), second.as_str()),
+                ("--ir", "--text") | ("--text", "--ir")
+            ) =>
+        {
+            compile_file(path, Mode::EmitIRText)
+        }
         _ => {
-            eprintln!("usage: mulang program.muji");
+            eprintln!("usage: mulang [--ir [--text]] program.muji");
             ExitCode::FAILURE
         }
     };
@@ -33,7 +54,7 @@ fn main() -> ExitCode {
         })
 }
 
-fn compile_file(path: &str) -> ExitCode {
+fn compile_file(path: &str, mode: Mode) -> ExitCode {
     let source = match std::fs::read_to_string(path) {
         Ok(source) => source,
         Err(error) => {
@@ -72,6 +93,22 @@ fn compile_file(path: &str) -> ExitCode {
         Err(diagnostics) => {
             eprint!("{}", render_all(&diagnostics, &source, path));
             ExitCode::FAILURE
+        }
+        Ok(analysis) if matches!(mode, Mode::InterpretIR | Mode::EmitIRText) => {
+            let mut lowerer = Lowerer::new(analysis);
+            let ir_program = lowerer.lower(ast);
+
+            if let Mode::EmitIRText = mode {
+                let output_path = format!("{file_name_without_extension}.irmu");
+                if let Err(error) = std::fs::write(&output_path, format_program(&ir_program)) {
+                    eprintln!("mulang: cannot write {output_path}: {error}");
+                    return ExitCode::FAILURE;
+                }
+                return ExitCode::SUCCESS;
+            }
+
+            IRInterpreter::new(ir_program).run();
+            ExitCode::SUCCESS
         }
         Ok(analysis) => {
             let mut code_generator = CodeGenerator::new(analysis, file_name_without_extension);

@@ -5,8 +5,8 @@ use crate::{
         ExpressionKind::{self},
         Statement, StatementKind, UnaryOperator,
         sema::{
-            Analysis, FunctionLocation, IdentifierLocation, MAIN_FUNCTION, MemoryUnit,
-            STATIC_LINK_SLOT, VariableLocation,
+            __DEBUG_BOL_FUNCTION_NODE_ID, Analysis, FunctionAttributes, IdentifierAttributes,
+            MAIN_FUNCTION_NODE_ID, MemoryUnits, STATIC_LINK_OFFSET, VariableAttributes,
         },
     },
 };
@@ -56,22 +56,22 @@ impl CodeGenerator {
             .push(self.text_section_stack.pop().unwrap())
     }
 
-    fn get_function_location(&self, function_node_id: &str) -> &FunctionLocation {
-        match self.analysis.node_id_locations.get(function_node_id) {
-            Some(IdentifierLocation::Function(location)) => location,
+    fn get_function_location(&self, function_node_id: &str) -> &FunctionAttributes {
+        match self.analysis.node_id_attributes.get(function_node_id) {
+            Some(IdentifierAttributes::Function(location)) => location,
             _ => panic!("CODEGEN:: No function location recorded for {function_node_id}"),
         }
     }
 
-    fn get_variable_location(&self, declaration_node_id: &str) -> &VariableLocation {
-        match self.analysis.node_id_locations.get(declaration_node_id) {
-            Some(IdentifierLocation::Variable(location)) => location,
+    fn get_variable_location(&self, declaration_node_id: &str) -> &VariableAttributes {
+        match self.analysis.node_id_attributes.get(declaration_node_id) {
+            Some(IdentifierAttributes::Variable(location)) => location,
             _ => panic!("CODEGEN:: No variable location recorded for {declaration_node_id}"),
         }
     }
 
     fn get_frame_size_in_bytes(&self, frame_id: &str) -> usize {
-        translate_memory_units_to_bytes(self.get_function_location(frame_id).size)
+        translate_memory_units_to_bytes(self.get_function_location(frame_id).frame_size)
     }
 
     // Returns the register holding the frame pointer of the frame the variable lives in,
@@ -82,8 +82,9 @@ impl CodeGenerator {
         scratch_register: usize,
     ) -> (String, i32) {
         let location = self.get_variable_location(declaration_node_id);
-        let hops = self.current_depth - location.depth;
-        let frame_local_offset = translate_slot_to_frame_pointer_offset(location.offset);
+        let hops = self.current_depth - location.frame_depth;
+        let frame_local_offset =
+            translate_slot_to_frame_pointer_offset(location.offset_from_frame_base);
 
         if hops == 0 {
             return (String::from("x29"), frame_local_offset);
@@ -95,7 +96,7 @@ impl CodeGenerator {
 
     // Leaves the frame pointer `hops` lexical levels out in the given register
     fn emit_static_link_walk(&mut self, hops: usize, register: usize) {
-        let static_link_offset = translate_slot_to_frame_pointer_offset(STATIC_LINK_SLOT);
+        let static_link_offset = translate_slot_to_frame_pointer_offset(STATIC_LINK_OFFSET);
         self.emit_line(&format!("ldr x{register}, [x29, #{static_link_offset}]"));
         // Keep walking n times
         for _ in 1..hops {
@@ -197,7 +198,7 @@ impl CodeGenerator {
         self.emit_outer_level_line(".p2align 2");
         self.emit_outer_level_line("_main:");
 
-        self.push_frame_and_emit_assembly(self.get_frame_size_in_bytes(MAIN_FUNCTION));
+        self.push_frame_and_emit_assembly(self.get_frame_size_in_bytes(MAIN_FUNCTION_NODE_ID));
 
         for statement in &ast.block.statements {
             self.emit_statement_assembly(statement)?;
@@ -257,7 +258,7 @@ impl CodeGenerator {
                 );
 
                 // Store from x15 (passed in frame pointer) to the slot
-                let static_link_offset = translate_slot_to_frame_pointer_offset(STATIC_LINK_SLOT);
+                let static_link_offset = translate_slot_to_frame_pointer_offset(STATIC_LINK_OFFSET);
                 self.emit_line(&format!("str x15, [x29, #{static_link_offset}]"));
 
                 for (idx, parameter) in definition.parameters.iter().enumerate() {
@@ -475,7 +476,6 @@ impl CodeGenerator {
                 Ok(())
             }
             ExpressionKind::Call { callee, arguments } => {
-                // Stack arguments
                 for argument in arguments.iter().skip(8).rev() {
                     self.emit_expression_evaluation_assembly_and_push_evaluated(argument)?;
                     self.pop_to_xn(0);
@@ -498,7 +498,7 @@ impl CodeGenerator {
                 // Static links
                 // If I'm the parent, I store in x15 my own x29(fp)
                 // If I'm not, store into x15 whatever fp I was called with
-                let hops = self.current_depth - self.get_function_location(&node_id).depth;
+                let hops = self.current_depth - self.get_function_location(&node_id).frame_depth;
                 if hops == 0 {
                     self.emit_line("mov x15, x29");
                 } else {
@@ -532,7 +532,7 @@ impl CodeGenerator {
         self.emit_outer_level_line("// BUILTIN DEBUGGER");
 
         self.emit_outer_level_line(".p2align 2");
-        self.emit_outer_level_line("_debug_bol:");
+        self.emit_outer_level_line(&format!("{__DEBUG_BOL_FUNCTION_NODE_ID}:"));
 
         // Could use a frame here, but not necessary for a builtin
         self.push_frame_and_emit_assembly(16);
@@ -575,12 +575,12 @@ impl CodeGenerator {
     }
 }
 
-fn translate_memory_units_to_bytes(m: MemoryUnit) -> usize {
+fn translate_memory_units_to_bytes(m: MemoryUnits) -> usize {
     let m = usize::try_from(m).expect("Memory units must be non-negative");
     return (m * MEMORY_UNIT_SCALE).div_ceil(STACK_ALIGNMENT) * STACK_ALIGNMENT;
 }
 
-fn translate_slot_to_frame_pointer_offset(slot: MemoryUnit) -> i32 {
+fn translate_slot_to_frame_pointer_offset(slot: MemoryUnits) -> i32 {
     let slot = usize::try_from(slot).expect("Slots must be non-negative");
     -i32::try_from(MEMORY_UNIT_SCALE * (slot + 1)).expect("Failed to convert slot to offset")
 }
