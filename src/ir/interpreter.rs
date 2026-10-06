@@ -145,7 +145,7 @@ impl IRInterpreter {
                 }) => {
                     let frame_addr = self.current_frame().get(*src_base_reg);
                     let frame = self.get_frame_at_address(to_usize(frame_addr));
-                    let value = frame.get(to_usize(*offset));
+                    let value = frame.get(*offset);
                     self.current_frame().insert(*dst_reg, value);
                 }
                 Instruction::StoreFromRegister(StoreFromRegisterSpec {
@@ -156,7 +156,7 @@ impl IRInterpreter {
                     let value = self.current_frame().get(*src_reg);
                     let frame_addr = self.current_frame().get(*dst_base_reg);
                     let frame = self.get_frame_at_address(to_usize(frame_addr));
-                    frame.insert(to_usize(*offset), value);
+                    frame.insert(*offset, value);
                 }
                 Instruction::LoadFrameAddress(LoadFrameAddressSpec { dst_reg }) => {
                     let current_frame_addr = to_i64(self.current_frame_addr());

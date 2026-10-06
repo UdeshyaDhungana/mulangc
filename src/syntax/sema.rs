@@ -9,12 +9,11 @@ use crate::{
     },
 };
 
-pub type MemoryUnits = i64;
+pub type MemoryUnits = usize;
 
 pub const MAIN_FUNCTION_NODE_ID: &str = "_main";
 pub const __DEBUG_BOL_FUNCTION_NODE_ID: &str = "__debug_bol";
-
-pub const STATIC_LINK_OFFSET: i64 = 0;
+pub const STATIC_LINK_LOGICAL_OFFSET_IN_AST_FRAME: MemoryUnits = 0;
 
 struct FunctionSymbolInfo {
     identifier: Identifier,
@@ -267,7 +266,7 @@ impl Sema {
         self.record_frame_location_in_analysis(String::from(MAIN_FUNCTION_NODE_ID), 0);
         self.push_scope(Scope::new(ScopeType::Function {
             node_id: String::from(MAIN_FUNCTION_NODE_ID),
-            accumulated_frame_size: 1,
+            accumulated_frame_size: 0,
         }));
 
         // DEBUG: Just add `bol` builtin so analyzer won't complain
@@ -401,7 +400,7 @@ impl Sema {
 
                 self.push_scope(Scope::new(ScopeType::Function {
                     node_id: identifier.node_id.clone(),
-                    accumulated_frame_size: 1,
+                    accumulated_frame_size: 0,
                 }));
                 for parameter in parameters {
                     let parameter_name = parameter.name.clone();
@@ -522,7 +521,7 @@ impl Sema {
             }
             ExpressionKind::Call { callee, arguments } => {
                 let function_name = callee.name.clone();
-                let mut was_callee_resolved_from_scope_stack = false;
+                let mut was_callee_resolved_from_frame_stack = false;
 
                 // Check within the scope stack
                 // Scope stack takes priority over lookahead map
@@ -552,7 +551,7 @@ impl Sema {
                                     ),
                                 ));
                             }
-                            was_callee_resolved_from_scope_stack = true;
+                            was_callee_resolved_from_frame_stack = true;
                             self.analysis
                                 .use_site_node_id_resolution_map
                                 .insert(callee.node_id.clone(), identifier.node_id.clone());
@@ -562,7 +561,7 @@ impl Sema {
 
                 // Check within the lookahead definitions
                 let mut was_callee_resolved_from_lookahead_definitions = false;
-                if !was_callee_resolved_from_scope_stack
+                if !was_callee_resolved_from_frame_stack
                     && let Some(fn_definition) = self
                         .lookahead_function_definitions
                         .iter()
@@ -590,7 +589,7 @@ impl Sema {
                     );
                 }
 
-                if !was_callee_resolved_from_scope_stack
+                if !was_callee_resolved_from_frame_stack
                     && !was_callee_resolved_from_lookahead_definitions
                 {
                     return Err(Diagnostic::error(

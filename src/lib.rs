@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-pub mod compiler;
+pub mod codegen;
 pub mod diagnostics;
 pub mod ir;
 pub mod syntax;

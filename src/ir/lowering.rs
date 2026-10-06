@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     ir::instructions::{
         BinaryOpSpec, BinaryOperation, CallSpec, GoifSpec, IRFunction, IRProgram,
-        Instruction::{self, BinaryOp, LoadFrameAddress, StoreFromRegister},
+        Instruction::{self, BinaryOp, LoadFrameAddress, LoadImmediate, StoreFromRegister},
         LoadFrameAddressSpec, LoadImmediateSpec, LoadToRegisterSpec, MoveSpec, RegisterNumber,
         ReturnSpec, StoreFromRegisterSpec, UnaryOpSpec, UnaryOperation,
     },
@@ -14,7 +14,8 @@ use crate::{
         UnaryOperator,
         sema::{
             __DEBUG_BOL_FUNCTION_NODE_ID, Analysis, Counter, FunctionAttributes,
-            IdentifierAttributes, MAIN_FUNCTION_NODE_ID, MemoryUnits, STATIC_LINK_OFFSET,
+            IdentifierAttributes, MAIN_FUNCTION_NODE_ID, MemoryUnits,
+            STATIC_LINK_LOGICAL_OFFSET_IN_AST_FRAME,
         },
     },
 };
@@ -23,8 +24,6 @@ pub struct Lowerer {
     analysis: Analysis,
     registered_functions: HashMap<String, IRFunction>,
 
-    // For navigating the stack and keeping records
-    reg_counter: Vec<RegisterNumber>,
     current_function_stack: Vec<IRFunction>,
 
     counter: Counter,
@@ -35,21 +34,22 @@ impl Lowerer {
         Self {
             analysis,
             registered_functions: HashMap::new(),
-            reg_counter: Vec::new(),
             current_function_stack: Vec::new(),
             counter: Counter::default(),
         }
     }
 
     fn get_current_lexical_depth(&self) -> usize {
-        self.reg_counter.len() - 1
+        self.current_function_stack.len() - 1
     }
 
     fn get_next_register(&mut self) -> RegisterNumber {
-        let last = self.reg_counter.last_mut().unwrap();
-        let result = *last;
-        *last += 1;
-        result
+        let last = self
+            .current_function_stack
+            .last_mut()
+            .unwrap()
+            .get_next_register();
+        last
     }
 
     fn append_instruction(&mut self, instruction: Instruction) {
@@ -60,15 +60,12 @@ impl Lowerer {
         current_function.push_instruction(instruction);
     }
 
-    fn add_function_to_scope_stack(&mut self, node_id: &str, frame_size: MemoryUnits, argc: usize) {
+    fn push_fn_to_frame_stack(&mut self, node_id: &str, frame_size: MemoryUnits, argc: usize) {
         let new_fn = IRFunction::new(node_id, frame_size, argc);
         self.current_function_stack.push(new_fn);
-        // The first register stores static link
-        // The subsequent argc registers store the arguments
-        self.reg_counter.push(argc + 1);
     }
 
-    fn remove_function_from_scope_stack(&mut self) {
+    fn pop_fn_from_frame_stack(&mut self) {
         self.current_function_stack
             .last_mut()
             .expect("At least one function must be present")
@@ -79,26 +76,34 @@ impl Lowerer {
             .expect("At least one function must be present");
         self.registered_functions
             .insert(ended_function.node_id(), ended_function);
-        self.reg_counter.pop();
     }
 
     pub fn register_builtins(&mut self) {
-        self.add_function_to_scope_stack(__DEBUG_BOL_FUNCTION_NODE_ID, 0, 1);
-        self.remove_function_from_scope_stack();
+        self.push_fn_to_frame_stack(
+            __DEBUG_BOL_FUNCTION_NODE_ID,
+            self.frame_size_for_function(__DEBUG_BOL_FUNCTION_NODE_ID),
+            1,
+        );
+        self.pop_fn_from_frame_stack();
     }
 
-    pub fn lower(&mut self, ast: AST) -> IRProgram {
+    pub fn lower(mut self, ast: AST) -> IRProgram {
         self.register_builtins();
         // The program cannot take arguments from OS as of now
-        self.add_function_to_scope_stack(
+        self.push_fn_to_frame_stack(
             MAIN_FUNCTION_NODE_ID,
             self.frame_size_for_function(MAIN_FUNCTION_NODE_ID),
             0,
         );
         self.lower_block(ast.block);
-        // Since main is the function that's removed at last
-        // The registered functions's last entry is always main
-        self.remove_function_from_scope_stack();
+
+        // return 0;
+        self.append_instruction(LoadImmediate(LoadImmediateSpec {
+            dst_reg: 0,
+            immediate: 0,
+        }));
+        self.append_instruction(Instruction::Return(ReturnSpec { src_reg: 0 }));
+        self.pop_fn_from_frame_stack();
 
         std::mem::take(&mut self.registered_functions)
     }
@@ -126,7 +131,8 @@ impl Lowerer {
                 self.append_instruction(StoreFromRegister(StoreFromRegisterSpec {
                     src_reg: expr_reg,
                     dst_base_reg: frame_address_reg,
-                    offset: variable_location.offset_from_frame_base,
+                    // The 0th offset is always reserved for static link
+                    offset: variable_location.offset_from_frame_base + 1,
                 }));
             }
             StatementKind::Return(expression) => {
@@ -137,15 +143,9 @@ impl Lowerer {
                 self.lower_expression(expression);
             }
             StatementKind::Function(function_definition) => {
-                let frame_size = self
-                    .analysis
-                    .must_get_function_attributes_from_node_id(
-                        &function_definition.identifier.node_id,
-                    )
-                    .frame_size;
-                self.add_function_to_scope_stack(
+                self.push_fn_to_frame_stack(
                     &function_definition.identifier.node_id,
-                    frame_size,
+                    self.frame_size_for_function(&function_definition.identifier.node_id),
                     function_definition.parameters.len(),
                 );
                 let frame_address_reg = self.get_next_register();
@@ -155,8 +155,9 @@ impl Lowerer {
                 self.append_instruction(StoreFromRegister(StoreFromRegisterSpec {
                     src_reg: 0,
                     dst_base_reg: frame_address_reg,
-                    offset: STATIC_LINK_OFFSET,
+                    offset: STATIC_LINK_LOGICAL_OFFSET_IN_AST_FRAME,
                 }));
+
                 for (idx, parameter) in function_definition.parameters.iter().enumerate() {
                     let offset = self
                         .analysis
@@ -165,9 +166,10 @@ impl Lowerer {
                     self.append_instruction(StoreFromRegister(StoreFromRegisterSpec {
                         src_reg: idx + 1,
                         dst_base_reg: frame_address_reg,
-                        offset,
+                        offset: offset + 1,
                     }));
                 }
+
                 let mut has_return = false;
                 for statement in function_definition.body.statements {
                     if matches!(statement.kind, StatementKind::Return(..)) {
@@ -188,7 +190,7 @@ impl Lowerer {
                     }));
                 }
 
-                self.remove_function_from_scope_stack();
+                self.pop_fn_from_frame_stack();
             }
             StatementKind::If(conditional) => {
                 self.lower_conditional(conditional);
@@ -253,8 +255,8 @@ impl Lowerer {
         match expression.kind {
             ExpressionKind::Identifier(identifier) => {
                 let resolved_node_id = self.analysis.resolve(&identifier.node_id);
-                let (frame_pointer_reg, offset) =
-                    self.get_frame_pointer_reg_and_offset_for_node_id(resolved_node_id);
+                let (frame_pointer_reg, offset) = self
+                    .get_frame_pointer_reg_and_logical_local_offset_for_node_id(resolved_node_id);
                 let dst_reg = self.get_next_register();
                 self.append_instruction(Instruction::LoadToRegister(LoadToRegisterSpec {
                     dst_reg,
@@ -344,8 +346,8 @@ impl Lowerer {
                 let expression_reg = self.lower_expression(*value);
                 let AssignmentTarget::Variable(identifier) = target;
                 let resolved_node_id = self.analysis.resolve(&identifier.node_id);
-                let (frame_pointer_reg, offset) =
-                    self.get_frame_pointer_reg_and_offset_for_node_id(resolved_node_id);
+                let (frame_pointer_reg, offset) = self
+                    .get_frame_pointer_reg_and_logical_local_offset_for_node_id(resolved_node_id);
                 self.append_instruction(Instruction::StoreFromRegister(StoreFromRegisterSpec {
                     src_reg: expression_reg,
                     dst_base_reg: frame_pointer_reg,
@@ -418,10 +420,10 @@ impl Lowerer {
 
     // Returns the register number holding the frame pointer
     // and local offset within the frame for that node id
-    fn get_frame_pointer_reg_and_offset_for_node_id(
+    fn get_frame_pointer_reg_and_logical_local_offset_for_node_id(
         &mut self,
         node_id: String,
-    ) -> (RegisterNumber, i64) {
+    ) -> (RegisterNumber, MemoryUnits) {
         let (scope_depth, offset_from_frame_base) = {
             let location = self
                 .analysis
@@ -443,7 +445,7 @@ impl Lowerer {
             }));
         }
 
-        (frame_address_reg, offset_from_frame_base)
+        (frame_address_reg, offset_from_frame_base + 1)
     }
 
     // How many memory units does a function take
@@ -451,7 +453,9 @@ impl Lowerer {
         if let Some(IdentifierAttributes::Function(FunctionAttributes { frame_size, .. })) =
             self.analysis.node_id_attributes.get(node_id)
         {
-            return *frame_size;
+            // A function always takes one more memory unit than its frame size
+            // because one is reserved for static link
+            return *frame_size + 1;
         };
 
         panic!("LOWERING:: No function location recorded for {node_id}");
