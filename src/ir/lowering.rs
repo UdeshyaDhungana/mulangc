@@ -295,9 +295,9 @@ impl Lowerer {
                 let Ok(operation) = BinaryOperation::try_from(operator) else {
                     let is_boolean_or = matches!(operator, BinaryOperator::BooleanOr);
 
-                    let early_exit_label = format!("EARLY_EXIT_{}", self.counter.next());
-                    let late_exit_label = format!("LATE_EXIT_{}", self.counter.next());
-                    let end_label = format!("END_{}", self.counter.next());
+                    let early_exit_label = format!("EARLY_EXIT_{}", self.counter.advance());
+                    let late_exit_label = format!("LATE_EXIT_{}", self.counter.advance());
+                    let end_label = format!("END_{}", self.counter.advance());
 
                     self.append_instruction(Instruction::Goif(GoifSpec {
                         condition_reg: left_reg,

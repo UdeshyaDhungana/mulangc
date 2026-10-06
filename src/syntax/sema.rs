@@ -75,7 +75,7 @@ pub struct Counter {
 }
 
 impl Counter {
-    pub fn next(&mut self) -> usize {
+    pub fn advance(&mut self) -> usize {
         self.count += 1;
         self.count - 1
     }
