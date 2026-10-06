@@ -21,7 +21,7 @@ use crate::{
 
 // IR frame layout, in logical slots (see _ir_specs.md):
 //   slot 0                      static link
-//   slots 1 ..= sema frame_size params, then locals
+//   slots 1 ..= variable_slot_count params, then locals
 pub const STATIC_LINK_LOGICAL_OFFSET: MemoryUnits = 0;
 const RESERVED_SLOTS_BEFORE_LOCALS: MemoryUnits = 1;
 
@@ -44,7 +44,7 @@ impl Lowerer {
         }
     }
 
-    fn get_current_lexical_depth(&self) -> usize {
+    fn get_current_frame_depth(&self) -> usize {
         self.current_function_stack.len() - 1
     }
 
@@ -373,11 +373,11 @@ impl Lowerer {
                 // If I'm the parent, pass my frame address, else
                 // pass on whatever static link I was handed off
                 let resolved_node_id = self.analysis.resolve(&callee.node_id);
-                let is_caller_parent = self.get_current_lexical_depth()
+                let is_caller_parent = self.get_current_frame_depth()
                     == self
                         .analysis
                         .must_get_function_attributes_from_node_id(&resolved_node_id)
-                        .frame_depth;
+                        .definition_depth;
                 self.append_instruction(Instruction::Call(CallSpec {
                     function_node_id: self.analysis.resolve(&callee.node_id),
                     static_link_reg: if is_caller_parent { frame_reg } else { 0 },
@@ -426,14 +426,14 @@ impl Lowerer {
         &mut self,
         node_id: String,
     ) -> (RegisterNumber, MemoryUnits) {
-        let (scope_depth, offset_from_frame_base) = {
+        let (variable_frame_depth, offset_from_frame_base) = {
             let location = self
                 .analysis
                 .must_get_variable_attributes_from_node_id(&node_id);
             (location.frame_depth, location.offset_from_frame_base)
         };
 
-        let hops = self.get_current_lexical_depth() - scope_depth;
+        let hops = self.get_current_frame_depth() - variable_frame_depth;
         let frame_address_reg = self.get_next_register();
         self.append_instruction(Instruction::LoadFrameAddress(LoadFrameAddressSpec {
             dst_reg: frame_address_reg,
@@ -455,10 +455,12 @@ impl Lowerer {
 
     // How many memory units does a function take
     fn frame_size_for_function(&self, node_id: &str) -> MemoryUnits {
-        if let Some(IdentifierAttributes::Function(FunctionAttributes { frame_size, .. })) =
-            self.analysis.node_id_attributes.get(node_id)
+        if let Some(IdentifierAttributes::Function(FunctionAttributes {
+            variable_slot_count,
+            ..
+        })) = self.analysis.node_id_attributes.get(node_id)
         {
-            return *frame_size + RESERVED_SLOTS_BEFORE_LOCALS;
+            return *variable_slot_count + RESERVED_SLOTS_BEFORE_LOCALS;
         };
 
         panic!("LOWERING:: No function location recorded for {node_id}");

@@ -28,7 +28,7 @@ enum SymbolInfo {
 enum ScopeType {
     Function {
         node_id: String,
-        accumulated_frame_size: MemoryUnits,
+        variable_slot_count: MemoryUnits,
     },
     Block,
 }
@@ -88,8 +88,10 @@ pub struct VariableAttributes {
 
 #[derive(Debug)]
 pub struct FunctionAttributes {
-    pub frame_depth: usize,
-    pub frame_size: MemoryUnits,
+    // Depth of the frame the function is defined in, not of its own frame
+    pub definition_depth: usize,
+    // Params and locals; excludes the static link
+    pub variable_slot_count: MemoryUnits,
 }
 
 #[derive(Debug)]
@@ -185,9 +187,9 @@ impl Sema {
             match &mut scope.scope_type {
                 ScopeType::Function {
                     node_id: frame_id,
-                    accumulated_frame_size: size,
+                    variable_slot_count,
                 } => {
-                    return (frame_id, size);
+                    return (frame_id, variable_slot_count);
                 }
                 ScopeType::Block => continue,
             }
@@ -195,7 +197,7 @@ impl Sema {
         panic!("At least one frame must exist during semantic analysis");
     }
 
-    fn frame_depth(&self) -> usize {
+    fn current_frame_depth(&self) -> usize {
         self.scopes_stack
             .iter()
             .filter(|scope| matches!(scope.scope_type, ScopeType::Function { .. }))
@@ -204,22 +206,22 @@ impl Sema {
     }
 
     // node_id means the node id of the function identifier
-    fn record_frame_location_in_analysis(&mut self, node_id: String, depth: usize) {
+    fn record_frame_location_in_analysis(&mut self, node_id: String, definition_depth: usize) {
         self.analysis.node_id_attributes.insert(
             node_id,
             IdentifierAttributes::Function(FunctionAttributes {
-                frame_depth: depth,
-                // We'll calculate the frame size once it ends
-                frame_size: 0,
+                definition_depth,
+                // Counted once the function scope is popped
+                variable_slot_count: 0,
             }),
         );
     }
 
     fn allocate_slot_for_variable_in_current_frame(&mut self, identifier: &Identifier) {
-        let depth = self.frame_depth();
-        let (_, size) = self.current_frame_mut();
-        let slot = *size;
-        *size += 1;
+        let depth = self.current_frame_depth();
+        let (_, variable_slot_count) = self.current_frame_mut();
+        let slot = *variable_slot_count;
+        *variable_slot_count += 1;
         self.analysis.node_id_attributes.insert(
             identifier.node_id.clone(),
             IdentifierAttributes::Variable(VariableAttributes {
@@ -241,7 +243,7 @@ impl Sema {
 
         let ScopeType::Function {
             node_id: frame_id,
-            accumulated_frame_size,
+            variable_slot_count,
         } = scope.scope_type
         else {
             return;
@@ -249,14 +251,14 @@ impl Sema {
 
         self.analysis
             .must_get_function_attributes_from_node_id(&frame_id)
-            .frame_size = accumulated_frame_size;
+            .variable_slot_count = variable_slot_count;
     }
 
     pub fn analyse(mut self, ast: &AST) -> Result<Analysis, Vec<Diagnostic>> {
         self.record_frame_location_in_analysis(String::from(MAIN_FUNCTION_NODE_ID), 0);
         self.push_scope(Scope::new(ScopeType::Function {
             node_id: String::from(MAIN_FUNCTION_NODE_ID),
-            accumulated_frame_size: 0,
+            variable_slot_count: 0,
         }));
 
         // DEBUG: Just add `bol` builtin so analyzer won't complain
@@ -354,7 +356,7 @@ impl Sema {
                 Ok(())
             }
             StatementKind::Return(expression) => {
-                if self.frame_depth() == 0 {
+                if self.current_frame_depth() == 0 {
                     return Err(Diagnostic::error(
                         expression.span,
                         "`de` must be used inside a `dhanda`",
@@ -385,12 +387,12 @@ impl Sema {
                     .add_function_identifier(identifier, parameters.len());
                 self.record_frame_location_in_analysis(
                     identifier.node_id.clone(),
-                    self.frame_depth(),
+                    self.current_frame_depth(),
                 );
 
                 self.push_scope(Scope::new(ScopeType::Function {
                     node_id: identifier.node_id.clone(),
-                    accumulated_frame_size: 0,
+                    variable_slot_count: 0,
                 }));
                 for parameter in parameters {
                     let parameter_name = parameter.name.clone();

@@ -164,11 +164,11 @@ impl CodeGenerator {
 
     fn generate_fn(&mut self, fn_node_id: String, ir_fn: IRFunction) {
         self.begin_new_text_section();
-        let max_registers_used = ir_fn.max_register_no();
+        let max_register_no = ir_fn.max_register_no();
         let argc = ir_fn.argc();
         let frame_size = ir_fn.frame_size();
         self.emit_outer_level_line(&format!(
-            "// {fn_node_id}: regs_used={max_registers_used}, args={argc}, frame_size={frame_size}",
+            "// {fn_node_id}: max_register_no={max_register_no}, args={argc}, frame_size={frame_size}",
         ));
         self.emit_outer_level_line(".p2align 2");
 
@@ -176,7 +176,7 @@ impl CodeGenerator {
             match instruction {
                 Instruction::FunctionDefinition(FunctionDefinitionSpec { node_id, .. }) => {
                     self.emit_outer_level_line(&format!("{}:", node_id));
-                    self.emit_assembly_for_reserving_frame(max_registers_used);
+                    self.emit_assembly_for_reserving_frame(max_register_no);
 
                     // Copy x9 (static link) onto its slot
                     let static_link_offset =
