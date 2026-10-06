@@ -15,6 +15,8 @@ const STACK_ALIGNMENT: usize = 16;
 const FRAME_RECORD_BYTES: usize = 16;
 const ARGUMENT_REGISTER_COUNT: usize = 8;
 // Each stack argument takes a full 16 bytes so sp stays aligned
+// I did it so that we wouldn't have to think too much about alignment here
+// Might incure a small memory overhead but acceptable for now
 const STACK_ARGUMENT_BYTES: usize = 16;
 
 #[derive(Default)]
