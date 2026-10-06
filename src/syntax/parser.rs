@@ -69,7 +69,7 @@ impl Parser<'_> {
     }
 
     fn get_node_id(&mut self, identifier_name: String) -> String {
-        let next = self.counter.next();
+        let next = self.counter.advance();
         format!("{identifier_name}_{next}")
     }
 
@@ -163,7 +163,7 @@ impl Parser<'_> {
             None
         };
 
-        let next_id = self.counter.next();
+        let next_id = self.counter.advance();
         Ok(Conditional {
             node_id: format!("yedi_{next_id}"),
             condition,
@@ -179,7 +179,7 @@ impl Parser<'_> {
         self.expect(Token::RightParenthesis)?;
         let body = self.parse_block()?;
 
-        let node_id = self.counter.next();
+        let node_id = self.counter.advance();
         Ok(Statement {
             span: start.joined_with(body.span),
             kind: StatementKind::While {
@@ -216,7 +216,7 @@ impl Parser<'_> {
         self.expect(Token::RightParenthesis)?;
         let body = self.parse_block()?;
 
-        let next_id = self.counter.next();
+        let next_id = self.counter.advance();
         Ok(Statement {
             span: start.joined_with(body.span),
             kind: StatementKind::For {

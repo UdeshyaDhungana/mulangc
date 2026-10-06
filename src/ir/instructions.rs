@@ -131,8 +131,8 @@ impl IRFunction {
         IRFunction {
             instructions: vec![Instruction::FunctionDefinition(FunctionDefinitionSpec {
                 node_id: String::from(node_id),
-                frame_size: frame_size,
-                argc: argc,
+                frame_size,
+                argc,
             })],
             is_lowering_complete: false,
             next_register_number: argc + 1,
@@ -184,7 +184,7 @@ impl IRFunction {
     }
 
     pub fn end(&mut self) {
-        if self.instructions.len() == 0 {
+        if self.instructions.is_empty() {
             panic!("Cannot end function before it's begun")
         }
         self.is_lowering_complete = true;
@@ -319,7 +319,7 @@ impl fmt::Display for Instruction {
 pub fn format_program(program: &IRProgram) -> String {
     let mut output = String::new();
 
-    for (_, ir_function) in program {
+    for ir_function in program.values() {
         for instruction in &ir_function.instructions {
             let indentation = match instruction {
                 Instruction::FunctionDefinition(_) | Instruction::Label(_) => "",

@@ -75,7 +75,7 @@ pub struct Counter {
 }
 
 impl Counter {
-    pub fn next(&mut self) -> usize {
+    pub fn advance(&mut self) -> usize {
         self.count += 1;
         self.count - 1
     }
@@ -100,19 +100,12 @@ pub enum IdentifierAttributes {
 }
 
 #[derive(Debug)]
+#[derive(Default)]
 pub struct Analysis {
     pub use_site_node_id_resolution_map: HashMap<String, String>,
     pub node_id_attributes: HashMap<String, IdentifierAttributes>,
 }
 
-impl Default for Analysis {
-    fn default() -> Self {
-        Self {
-            use_site_node_id_resolution_map: HashMap::new(),
-            node_id_attributes: HashMap::new(),
-        }
-    }
-}
 
 impl Analysis {
     pub fn must_get_variable_attributes_from_node_id(&self, node_id: &str) -> &VariableAttributes {
@@ -284,33 +277,30 @@ impl Sema {
         // Pass 1
         // Process functions signatures first, so functions can be used before their definitions are set in
         for statement in &ast.block.statements {
-            match &statement.kind {
-                StatementKind::Function(FunctionDefinition {
+            if let StatementKind::Function(FunctionDefinition {
                     identifier,
                     parameters,
                     ..
-                }) => {
-                    let function_name = identifier.name.clone();
+                }) = &statement.kind {
+                let function_name = identifier.name.clone();
 
-                    if self.lookahead_function_definitions.iter().any(
-                        |pending_function_definition| {
-                            pending_function_definition.identifier.name == identifier.name
-                        },
-                    ) {
-                        self.diagnostics.push(Diagnostic::error(
-                            identifier.span,
-                            format!("SEMA:: dhanda `{function_name} has already been defined`"),
-                        ));
-                        continue;
-                    }
-
-                    self.lookahead_function_definitions
-                        .push(LookaheadFunctionDefinition {
-                            identifier: identifier.clone(),
-                            arity: parameters.len(),
-                        })
+                if self.lookahead_function_definitions.iter().any(
+                    |pending_function_definition| {
+                        pending_function_definition.identifier.name == identifier.name
+                    },
+                ) {
+                    self.diagnostics.push(Diagnostic::error(
+                        identifier.span,
+                        format!("SEMA:: dhanda `{function_name} has already been defined`"),
+                    ));
+                    continue;
                 }
-                _ => {}
+
+                self.lookahead_function_definitions
+                    .push(LookaheadFunctionDefinition {
+                        identifier: identifier.clone(),
+                        arity: parameters.len(),
+                    })
             }
         }
 
@@ -466,10 +456,10 @@ impl Sema {
                 match symbol_info {
                     SymbolInfo::Function(..) => {
                         let identifier_name = identifier.name.clone();
-                        return Err(Diagnostic::error(
+                        Err(Diagnostic::error(
                             expression.span,
                             format!("Identifier {identifier_name} is a `dhanda`, not a `variable`"),
-                        ));
+                        ))
                     }
                     SymbolInfo::Variable(Identifier {
                         node_id: resolved_node_id,

@@ -44,12 +44,12 @@ impl Lowerer {
     }
 
     fn get_next_register(&mut self) -> RegisterNumber {
-        let last = self
+        
+        self
             .current_function_stack
             .last_mut()
             .unwrap()
-            .get_next_register();
-        last
+            .get_next_register()
     }
 
     fn append_instruction(&mut self, instruction: Instruction) {
@@ -295,9 +295,9 @@ impl Lowerer {
                 let Ok(operation) = BinaryOperation::try_from(operator) else {
                     let is_boolean_or = matches!(operator, BinaryOperator::BooleanOr);
 
-                    let early_exit_label = format!("EARLY_EXIT_{}", self.counter.next());
-                    let late_exit_label = format!("LATE_EXIT_{}", self.counter.next());
-                    let end_label = format!("END_{}", self.counter.next());
+                    let early_exit_label = format!("EARLY_EXIT_{}", self.counter.advance());
+                    let late_exit_label = format!("LATE_EXIT_{}", self.counter.advance());
+                    let end_label = format!("END_{}", self.counter.advance());
 
                     self.append_instruction(Instruction::Goif(GoifSpec {
                         condition_reg: left_reg,
@@ -317,7 +317,7 @@ impl Lowerer {
                     self.append_instruction(Instruction::Label(early_exit_label.clone()));
                     self.append_instruction(Instruction::Move(MoveSpec {
                         src_reg: left_reg,
-                        dst_reg: dst_reg,
+                        dst_reg,
                     }));
                     self.append_instruction(Instruction::Goto(end_label.clone()));
 
