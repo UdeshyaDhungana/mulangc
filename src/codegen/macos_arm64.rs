@@ -11,6 +11,11 @@ use crate::{
 const MEMORY_UNIT_SCALE: usize = 8;
 pub const REQUIRED_STACK_BYTES: usize = 64 * 1024 * 1024;
 const STACK_ALIGNMENT: usize = 16;
+// Saved x29 and x30, pushed by every prologue
+const FRAME_RECORD_BYTES: usize = 16;
+const ARGUMENT_REGISTER_COUNT: usize = 8;
+// Each stack argument takes a full 16 bytes so sp stays aligned
+const STACK_ARGUMENT_BYTES: usize = 16;
 
 #[derive(Default)]
 struct Section {
@@ -188,15 +193,17 @@ impl CodeGenerator {
                     for i in 0..argc {
                         let offset_for_arg_reg =
                             translate_logical_offset_to_physical_offset_for_ir_register(1 + i);
-                        if i < 8 {
+                        if i < ARGUMENT_REGISTER_COUNT {
                             self.emit_load_immediate_into_xn(offset_for_arg_reg, 10);
                             self.emit_line(&format!("str x{i}, [x29, x10]"));
                             continue;
                         }
 
-                        // The remaining arguments are found from the stack
-                        // The 16 offset is from the native space reserved for each frame (see emit frame push assembly)
-                        let argument_offset_from_old_sp = 16 + to_i64((i - 8) * 16);
+                        // The remaining arguments were pushed by the caller, just above our frame record
+                        let argument_offset_from_old_sp = to_i64(
+                            FRAME_RECORD_BYTES
+                                + (i - ARGUMENT_REGISTER_COUNT) * STACK_ARGUMENT_BYTES,
+                        );
                         self.emit_load_immediate_into_xn(argument_offset_from_old_sp, 11);
                         self.emit_line("ldr x11, [x29, x11]");
                         self.emit_load_immediate_into_xn(offset_for_arg_reg, 10);
@@ -387,26 +394,21 @@ impl CodeGenerator {
                     self.emit_load_immediate_into_xn(static_link_reg_offset, 10);
                     self.emit_line("ldr x9, [x29, x10]");
 
-                    for (i, arg_reg) in arg_regs.iter().enumerate() {
-                        // for the first 8 arguments, store them directly onto the registers
-                        if i < 8 {
-                            let arg_reg_offset =
-                                translate_logical_offset_to_physical_offset_for_ir_register(
-                                    *arg_reg,
-                                );
-                            self.emit_load_immediate_into_xn(arg_reg_offset, 10);
-                            self.emit_line(&format!("ldr x{i}, [x29, x10]"));
-                            continue;
-                        }
+                    // The first arguments go in x0..x7
+                    for (i, arg_reg) in arg_regs.iter().take(ARGUMENT_REGISTER_COUNT).enumerate() {
+                        let arg_reg_offset =
+                            translate_logical_offset_to_physical_offset_for_ir_register(*arg_reg);
+                        self.emit_load_immediate_into_xn(arg_reg_offset, 10);
+                        self.emit_line(&format!("ldr x{i}, [x29, x10]"));
+                    }
 
-                        // Load the argument onto x10 and push it onto the stack in reverse order
-                        let rev_arg_reg_offset =
-                            translate_logical_offset_to_physical_offset_for_ir_register(
-                                arg_regs[arg_regs.len() - i + 7],
-                            );
-                        self.emit_load_immediate_into_xn(rev_arg_reg_offset, 10);
+                    // The rest are pushed last first
+                    for arg_reg in arg_regs.iter().skip(ARGUMENT_REGISTER_COUNT).rev() {
+                        let arg_reg_offset =
+                            translate_logical_offset_to_physical_offset_for_ir_register(*arg_reg);
+                        self.emit_load_immediate_into_xn(arg_reg_offset, 10);
                         self.emit_line("ldr x10, [x29, x10]");
-                        self.emit_line("str x10, [sp, #-16]!");
+                        self.emit_line(&format!("str x10, [sp, #-{STACK_ARGUMENT_BYTES}]!"));
                     }
                     self.emit_line(&format!("bl {}", function_node_id));
 

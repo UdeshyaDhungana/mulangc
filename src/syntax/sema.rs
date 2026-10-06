@@ -513,82 +513,55 @@ impl Sema {
             }
             ExpressionKind::Call { callee, arguments } => {
                 let function_name = callee.name.clone();
-                let mut was_callee_resolved_from_frame_stack = false;
 
-                // Check within the scope stack
-                // Scope stack takes priority over lookahead map
-                if let Some(symbol_info) =
-                    self.get_symbol_info_for_identifier(function_name.clone())
-                {
-                    match symbol_info {
-                        SymbolInfo::Variable(..) => {
+                // Scope stack takes priority over lookahead definitions
+                let (definition_node_id, arity) =
+                    match self.get_symbol_info_for_identifier(function_name.clone()) {
+                        Some(SymbolInfo::Variable(..)) => {
                             return Err(Diagnostic::error(
                                 expression.span,
                                 "SEMA:: Called object is not a function",
                             ));
                         }
-                        SymbolInfo::Function(FunctionSymbolInfo { arity, identifier }) => {
-                            if *arity != arguments.len() {
-                                let few_many = if arguments.len() > *arity {
-                                    "many"
-                                } else {
-                                    "few"
-                                };
-
-                                let error_pointer_span = expression.span.end - 1;
+                        Some(SymbolInfo::Function(FunctionSymbolInfo { identifier, arity })) => {
+                            (identifier.node_id.clone(), *arity)
+                        }
+                        // Not in scope yet, so it must be defined further down
+                        None => match self
+                            .lookahead_function_definitions
+                            .iter()
+                            .find(|fn_definition| fn_definition.identifier.name == function_name)
+                        {
+                            Some(fn_definition) => (
+                                fn_definition.identifier.node_id.clone(),
+                                fn_definition.arity,
+                            ),
+                            None => {
                                 return Err(Diagnostic::error(
-                                    Span::new(error_pointer_span, error_pointer_span),
-                                    format!(
-                                        "SEMA:: too {few_many} arguments in call to `{function_name}`"
-                                    ),
+                                    callee.span,
+                                    format!("SEMA:: Usage of undefined function {function_name}"),
                                 ));
                             }
-                            was_callee_resolved_from_frame_stack = true;
-                            self.analysis
-                                .use_site_node_id_resolution_map
-                                .insert(callee.node_id.clone(), identifier.node_id.clone());
-                        }
-                    }
-                }
+                        },
+                    };
 
-                // Check within the lookahead definitions
-                let mut was_callee_resolved_from_lookahead_definitions = false;
-                if !was_callee_resolved_from_frame_stack
-                    && let Some(fn_definition) = self
-                        .lookahead_function_definitions
-                        .iter()
-                        .find(|fn_definition| fn_definition.identifier.name == function_name)
-                {
-                    if fn_definition.arity != arguments.len() {
-                        let few_many = if arguments.len() > fn_definition.arity {
-                            "many"
-                        } else {
-                            "few"
-                        };
+                if arity != arguments.len() {
+                    let few_many = if arguments.len() > arity {
+                        "many"
+                    } else {
+                        "few"
+                    };
 
-                        let error_pointer_span = expression.span.end;
-                        return Err(Diagnostic::error(
-                            Span::new(error_pointer_span, error_pointer_span),
-                            format!(
-                                "too {few_many} arguments to the function in call to `{function_name}`"
-                            ),
-                        ));
-                    }
-                    was_callee_resolved_from_lookahead_definitions = true;
-                    self.analysis.use_site_node_id_resolution_map.insert(
-                        callee.node_id.clone(),
-                        fn_definition.identifier.node_id.clone(),
-                    );
-                }
-
-                if !was_callee_resolved_from_frame_stack
-                    && !was_callee_resolved_from_lookahead_definitions
-                {
+                    let error_pointer_span = expression.span.end - 1;
                     return Err(Diagnostic::error(
-                        callee.span,
-                        format!("SEMA:: Usage of undefined function {function_name}"),
+                        Span::new(error_pointer_span, error_pointer_span),
+                        format!("SEMA:: too {few_many} arguments in call to `{function_name}`"),
                     ));
                 }
+
+                self.analysis
+                    .use_site_node_id_resolution_map
+                    .insert(callee.node_id.clone(), definition_node_id);
 
                 for argument in arguments {
                     self.analyse_expression(argument)?;
