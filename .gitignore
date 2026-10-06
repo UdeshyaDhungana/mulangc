@@ -4,4 +4,6 @@
 /test
 /test.s
 /test.dSYM/
+*.irmu
 .DS_Store
+*.o

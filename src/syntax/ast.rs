@@ -3,7 +3,7 @@ use std::fmt;
 use crate::diagnostics::Span;
 
 #[derive(Clone, Debug)]
-pub struct Program {
+pub struct AST {
     pub block: Block,
 }
 
@@ -160,7 +160,7 @@ impl fmt::Display for BinaryOperator {
     }
 }
 
-impl fmt::Display for Program {
+impl fmt::Display for AST {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write_statements(formatter, &self.block.statements, 0)
     }

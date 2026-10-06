@@ -4,16 +4,16 @@ use std::{collections::HashMap, ops::Deref};
 use crate::{
     diagnostics::{Diagnostic, Span},
     syntax::{
-        AssignmentTarget, Block, Conditional, Else, Expression, ExpressionKind, FunctionDefinition,
-        Identifier, Program, Statement, StatementKind,
+        AST, AssignmentTarget, Block, Conditional, Else, Expression, ExpressionKind,
+        FunctionDefinition, Identifier, Statement, StatementKind,
     },
 };
 
-pub type MemoryUnit = usize;
+pub type MemoryUnits = usize;
 
-pub const MAIN_FUNCTION: &str = "_main";
-
-pub const STATIC_LINK_SLOT: MemoryUnit = 0;
+pub const MAIN_FUNCTION_NODE_ID: &str = "_main";
+pub const __DEBUG_BOL_FUNCTION_NODE_ID: &str = "__debug_bol";
+pub const STATIC_LINK_LOGICAL_OFFSET_IN_AST_FRAME: MemoryUnits = 0;
 
 struct FunctionSymbolInfo {
     identifier: Identifier,
@@ -27,8 +27,10 @@ enum SymbolInfo {
 
 #[derive(Debug)]
 enum ScopeType {
-    Global { frame_id: String, size: MemoryUnit },
-    Function { frame_id: String, size: MemoryUnit },
+    Function {
+        node_id: String,
+        accumulated_frame_size: MemoryUnits,
+    },
     Block,
 }
 
@@ -52,7 +54,7 @@ impl Scope {
         );
     }
 
-    fn add_function_identifier_with_arity(&mut self, identifier: &Identifier, arity: usize) {
+    fn add_function_identifier(&mut self, identifier: &Identifier, arity: usize) {
         self.symbol_table.insert(
             identifier.name.clone(),
             SymbolInfo::Function(FunctionSymbolInfo {
@@ -73,46 +75,61 @@ pub struct Counter {
 }
 
 impl Counter {
-    pub fn next(&mut self) -> usize {
+    pub fn advance(&mut self) -> usize {
         self.count += 1;
         self.count - 1
     }
 }
 
 #[derive(Debug)]
-pub struct VariableLocation {
-    pub depth: usize,
-    pub offset: MemoryUnit,
+pub struct VariableAttributes {
+    pub frame_depth: usize,
+    pub offset_from_frame_base: MemoryUnits,
 }
 
 #[derive(Debug)]
-pub struct FunctionLocation {
-    pub depth: usize,
-    pub size: MemoryUnit,
+pub struct FunctionAttributes {
+    pub frame_depth: usize,
+    pub frame_size: MemoryUnits,
 }
 
 #[derive(Debug)]
-pub enum IdentifierLocation {
-    Variable(VariableLocation),
-    Function(FunctionLocation),
+pub enum IdentifierAttributes {
+    Variable(VariableAttributes),
+    Function(FunctionAttributes),
 }
 
 #[derive(Debug)]
+#[derive(Default)]
 pub struct Analysis {
     pub use_site_node_id_resolution_map: HashMap<String, String>,
-    pub node_id_locations: HashMap<String, IdentifierLocation>,
+    pub node_id_attributes: HashMap<String, IdentifierAttributes>,
 }
 
-impl Default for Analysis {
-    fn default() -> Self {
-        Self {
-            use_site_node_id_resolution_map: HashMap::new(),
-            node_id_locations: HashMap::new(),
-        }
-    }
-}
 
 impl Analysis {
+    pub fn must_get_variable_attributes_from_node_id(&self, node_id: &str) -> &VariableAttributes {
+        let Some(IdentifierAttributes::Variable(location)) = self.node_id_attributes.get(node_id)
+        else {
+            panic!("Variable with node id {node_id} not found");
+        };
+
+        location
+    }
+
+    pub fn must_get_function_attributes_from_node_id(
+        &mut self,
+        node_id: &str,
+    ) -> &mut FunctionAttributes {
+        let Some(IdentifierAttributes::Function(location)) =
+            self.node_id_attributes.get_mut(node_id)
+        else {
+            panic!("Function with node id {node_id} not found");
+        };
+
+        location
+    }
+
     pub fn resolve(&self, user_node_id: &String) -> String {
         self.use_site_node_id_resolution_map
             .get(user_node_id)
@@ -130,9 +147,6 @@ pub struct Sema {
     scopes_stack: Vec<Scope>,
     analysis: Analysis,
     diagnostics: Vec<Diagnostic>,
-    // Functions defined but not yet analysed
-    // We keep track of these (names, arity) so that
-    // they can be used before their definitions are analysed
     lookahead_function_definitions: Vec<LookaheadFunctionDefinition>,
 }
 
@@ -152,15 +166,6 @@ impl Sema {
         }
     }
 
-    fn get_enclosing_function_scope(&mut self) -> Option<&mut Scope> {
-        for scope in self.scopes_stack.iter_mut().rev() {
-            if matches!(scope.scope_type, ScopeType::Function { .. }) {
-                return Some(scope);
-            }
-        }
-        None
-    }
-
     fn get_current_scope(&mut self) -> &mut Scope {
         self.scopes_stack
             .last_mut()
@@ -178,10 +183,13 @@ impl Sema {
         None
     }
 
-    fn current_frame_mut(&mut self) -> (&String, &mut MemoryUnit) {
+    fn current_frame_mut(&mut self) -> (&String, &mut MemoryUnits) {
         for scope in self.scopes_stack.iter_mut().rev() {
             match &mut scope.scope_type {
-                ScopeType::Global { frame_id, size } | ScopeType::Function { frame_id, size } => {
+                ScopeType::Function {
+                    node_id: frame_id,
+                    accumulated_frame_size: size,
+                } => {
                     return (frame_id, size);
                 }
                 ScopeType::Block => continue,
@@ -193,28 +201,33 @@ impl Sema {
     fn frame_depth(&self) -> usize {
         self.scopes_stack
             .iter()
-            .filter(|scope| !matches!(scope.scope_type, ScopeType::Block))
+            .filter(|scope| matches!(scope.scope_type, ScopeType::Function { .. }))
             .count()
             - 1
     }
 
-    fn record_frame_location(&mut self, frame_id: String, depth: usize) {
-        self.analysis.node_id_locations.insert(
-            frame_id,
-            IdentifierLocation::Function(FunctionLocation { depth, size: 0 }),
+    // node_id means the node id of the function identifier
+    fn record_frame_location_in_analysis(&mut self, node_id: String, depth: usize) {
+        self.analysis.node_id_attributes.insert(
+            node_id,
+            IdentifierAttributes::Function(FunctionAttributes {
+                frame_depth: depth,
+                // We'll calculate the frame size once it ends
+                frame_size: 0,
+            }),
         );
     }
 
-    fn allocate_slot_for_variable_to_current_frame(&mut self, identifier: &Identifier) {
+    fn allocate_slot_for_variable_in_current_frame(&mut self, identifier: &Identifier) {
         let depth = self.frame_depth();
         let (_, size) = self.current_frame_mut();
         let slot = *size;
         *size += 1;
-        self.analysis.node_id_locations.insert(
+        self.analysis.node_id_attributes.insert(
             identifier.node_id.clone(),
-            IdentifierLocation::Variable(VariableLocation {
-                depth,
-                offset: slot,
+            IdentifierAttributes::Variable(VariableAttributes {
+                frame_depth: depth,
+                offset_from_frame_base: slot,
             }),
         );
     }
@@ -228,70 +241,72 @@ impl Sema {
             .scopes_stack
             .pop()
             .expect("A scope must exist to be popped");
-        if let ScopeType::Global { frame_id, size } | ScopeType::Function { frame_id, size } =
-            scope.scope_type
-            && let Some(IdentifierLocation::Function(location)) =
-                self.analysis.node_id_locations.get_mut(&frame_id)
-        {
-            location.size = size;
-        }
+
+        let ScopeType::Function {
+            node_id: frame_id,
+            accumulated_frame_size,
+        } = scope.scope_type
+        else {
+            return;
+        };
+
+        self.analysis
+            .must_get_function_attributes_from_node_id(&frame_id)
+            .frame_size = accumulated_frame_size;
     }
 
-    pub fn analyse(mut self, program: &Program) -> Result<Analysis, Vec<Diagnostic>> {
-        self.record_frame_location(String::from(MAIN_FUNCTION), 0);
-        self.push_scope(Scope::new(ScopeType::Global {
-            frame_id: String::from(MAIN_FUNCTION),
-            size: 1,
+    pub fn analyse(mut self, ast: &AST) -> Result<Analysis, Vec<Diagnostic>> {
+        self.record_frame_location_in_analysis(String::from(MAIN_FUNCTION_NODE_ID), 0);
+        self.push_scope(Scope::new(ScopeType::Function {
+            node_id: String::from(MAIN_FUNCTION_NODE_ID),
+            accumulated_frame_size: 0,
         }));
 
         // DEBUG: Just add `bol` builtin so analyzer won't complain
-        self.get_current_scope().add_function_identifier_with_arity(
+        self.get_current_scope().add_function_identifier(
             &Identifier {
                 name: String::from("bol"),
-                node_id: String::from("_debug_bol"),
+                node_id: String::from(__DEBUG_BOL_FUNCTION_NODE_ID),
                 span: Span::new(0, 0),
             },
             1,
         );
-        self.record_frame_location(String::from("_debug_bol"), 0);
+        self.record_frame_location_in_analysis(String::from(__DEBUG_BOL_FUNCTION_NODE_ID), 0);
         // END DEBUG
 
         // Pass 1
         // Process functions signatures first, so functions can be used before their definitions are set in
-        for statement in &program.block.statements {
-            match &statement.kind {
-                StatementKind::Function(FunctionDefinition {
+        for statement in &ast.block.statements {
+            if let StatementKind::Function(FunctionDefinition {
                     identifier,
                     parameters,
                     ..
-                }) => {
-                    let function_name = identifier.name.clone();
+                }) = &statement.kind {
+                let function_name = identifier.name.clone();
 
-                    if self.lookahead_function_definitions.iter().any(
-                        |pending_function_definition| {
-                            pending_function_definition.identifier.name == identifier.name
-                        },
-                    ) {
-                        self.diagnostics.push(Diagnostic::error(
-                            identifier.span,
-                            format!("SEMA:: dhanda `{function_name} has already been defined`"),
-                        ));
-                        continue;
-                    }
-
-                    self.lookahead_function_definitions
-                        .push(LookaheadFunctionDefinition {
-                            identifier: identifier.clone(),
-                            arity: parameters.len(),
-                        })
+                if self.lookahead_function_definitions.iter().any(
+                    |pending_function_definition| {
+                        pending_function_definition.identifier.name == identifier.name
+                    },
+                ) {
+                    self.diagnostics.push(Diagnostic::error(
+                        identifier.span,
+                        format!("SEMA:: dhanda `{function_name} has already been defined`"),
+                    ));
+                    continue;
                 }
-                _ => {}
+
+                self.lookahead_function_definitions
+                    .push(LookaheadFunctionDefinition {
+                        identifier: identifier.clone(),
+                        arity: parameters.len(),
+                    })
             }
         }
 
         // Pass 2
         // Process the rest of the statements
-        self.analyse_statements_collecting_diagnostics(&program.block.statements);
+        self.analyse_statements_collecting_diagnostics(&ast.block.statements);
         self.pop_scope();
 
         if self.diagnostics.is_empty() {
@@ -335,16 +350,16 @@ impl Sema {
                 }
 
                 self.get_current_scope().add_variable_identifier(identifier);
-                self.allocate_slot_for_variable_to_current_frame(identifier);
+                self.allocate_slot_for_variable_in_current_frame(identifier);
                 Ok(())
             }
             StatementKind::Return(expression) => {
-                let Some(_) = self.get_enclosing_function_scope() else {
+                if self.frame_depth() == 0 {
                     return Err(Diagnostic::error(
                         expression.span,
-                        "`de` should be inside a `dhanda`",
+                        "`de` must be used inside a `dhanda`",
                     ));
-                };
+                }
 
                 self.analyse_expression(expression)
             }
@@ -367,12 +382,15 @@ impl Sema {
 
                 // We should allow recursive calls, so register early
                 self.get_current_scope()
-                    .add_function_identifier_with_arity(identifier, parameters.len());
-                self.record_frame_location(identifier.node_id.clone(), self.frame_depth());
+                    .add_function_identifier(identifier, parameters.len());
+                self.record_frame_location_in_analysis(
+                    identifier.node_id.clone(),
+                    self.frame_depth(),
+                );
 
                 self.push_scope(Scope::new(ScopeType::Function {
-                    frame_id: identifier.node_id.clone(),
-                    size: 1,
+                    node_id: identifier.node_id.clone(),
+                    accumulated_frame_size: 0,
                 }));
                 for parameter in parameters {
                     let parameter_name = parameter.name.clone();
@@ -387,7 +405,7 @@ impl Sema {
                         ));
                     }
                     self.get_current_scope().add_variable_identifier(parameter);
-                    self.allocate_slot_for_variable_to_current_frame(parameter);
+                    self.allocate_slot_for_variable_in_current_frame(parameter);
                 }
                 self.analyse_statements_collecting_diagnostics(&body.statements);
                 self.pop_scope();
@@ -437,10 +455,11 @@ impl Sema {
 
                 match symbol_info {
                     SymbolInfo::Function(..) => {
-                        return Err(Diagnostic::error(
+                        let identifier_name = identifier.name.clone();
+                        Err(Diagnostic::error(
                             expression.span,
-                            "Usage of type `dhanda` as an expression",
-                        ));
+                            format!("Identifier {identifier_name} is a `dhanda`, not a `variable`"),
+                        ))
                     }
                     SymbolInfo::Variable(Identifier {
                         node_id: resolved_node_id,
@@ -492,7 +511,7 @@ impl Sema {
             }
             ExpressionKind::Call { callee, arguments } => {
                 let function_name = callee.name.clone();
-                let mut was_callee_resolved_from_scope_stack = false;
+                let mut was_callee_resolved_from_frame_stack = false;
 
                 // Check within the scope stack
                 // Scope stack takes priority over lookahead map
@@ -522,7 +541,7 @@ impl Sema {
                                     ),
                                 ));
                             }
-                            was_callee_resolved_from_scope_stack = true;
+                            was_callee_resolved_from_frame_stack = true;
                             self.analysis
                                 .use_site_node_id_resolution_map
                                 .insert(callee.node_id.clone(), identifier.node_id.clone());
@@ -532,7 +551,7 @@ impl Sema {
 
                 // Check within the lookahead definitions
                 let mut was_callee_resolved_from_lookahead_definitions = false;
-                if !was_callee_resolved_from_scope_stack
+                if !was_callee_resolved_from_frame_stack
                     && let Some(fn_definition) = self
                         .lookahead_function_definitions
                         .iter()
@@ -560,7 +579,7 @@ impl Sema {
                     );
                 }
 
-                if !was_callee_resolved_from_scope_stack
+                if !was_callee_resolved_from_frame_stack
                     && !was_callee_resolved_from_lookahead_definitions
                 {
                     return Err(Diagnostic::error(
@@ -598,9 +617,9 @@ mod tests {
     use crate::syntax::parse;
 
     fn analyse(source: &str) -> Result<Analysis, Vec<Diagnostic>> {
-        let program = parse(source)
+        let ast = parse(source)
             .unwrap_or_else(|diagnostics| panic!("should parse: {}", diagnostics[0].message));
-        Sema::new().analyse(&program)
+        Sema::new().analyse(&ast)
     }
 
     fn accepts(source: &str) {
