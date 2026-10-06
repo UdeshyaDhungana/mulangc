@@ -453,6 +453,8 @@ fn translate_logical_offset_to_physical_offset_for_ir_register(reg_no: usize) ->
     translate_logical_offset_to_physical_offset_for_local_variable(reg_no)
 }
 
+// Logical slot k sits at x29 - (k + 1) * 8, because x29 itself points at the
+// saved x29/x30 pair, so slot 0 (the static link) is at x29 - 8
 fn translate_logical_offset_to_physical_offset_for_local_variable(logical_offset: usize) -> i64 {
     -i64::try_from(MEMORY_UNIT_SCALE * (logical_offset + 1))
         .expect("Failed to convert slot to offset")

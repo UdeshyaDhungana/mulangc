@@ -13,7 +13,6 @@ pub type MemoryUnits = usize;
 
 pub const MAIN_FUNCTION_NODE_ID: &str = "_main";
 pub const __DEBUG_BOL_FUNCTION_NODE_ID: &str = "__debug_bol";
-pub const STATIC_LINK_LOGICAL_OFFSET_IN_AST_FRAME: MemoryUnits = 0;
 
 struct FunctionSymbolInfo {
     identifier: Identifier,
@@ -99,13 +98,11 @@ pub enum IdentifierAttributes {
     Function(FunctionAttributes),
 }
 
-#[derive(Debug)]
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Analysis {
     pub use_site_node_id_resolution_map: HashMap<String, String>,
     pub node_id_attributes: HashMap<String, IdentifierAttributes>,
 }
-
 
 impl Analysis {
     pub fn must_get_variable_attributes_from_node_id(&self, node_id: &str) -> &VariableAttributes {
@@ -278,17 +275,20 @@ impl Sema {
         // Process functions signatures first, so functions can be used before their definitions are set in
         for statement in &ast.block.statements {
             if let StatementKind::Function(FunctionDefinition {
-                    identifier,
-                    parameters,
-                    ..
-                }) = &statement.kind {
+                identifier,
+                parameters,
+                ..
+            }) = &statement.kind
+            {
                 let function_name = identifier.name.clone();
 
-                if self.lookahead_function_definitions.iter().any(
-                    |pending_function_definition| {
+                if self
+                    .lookahead_function_definitions
+                    .iter()
+                    .any(|pending_function_definition| {
                         pending_function_definition.identifier.name == identifier.name
-                    },
-                ) {
+                    })
+                {
                     self.diagnostics.push(Diagnostic::error(
                         identifier.span,
                         format!("SEMA:: dhanda `{function_name} has already been defined`"),

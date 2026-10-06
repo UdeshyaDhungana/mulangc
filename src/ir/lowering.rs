@@ -15,10 +15,15 @@ use crate::{
         sema::{
             __DEBUG_BOL_FUNCTION_NODE_ID, Analysis, Counter, FunctionAttributes,
             IdentifierAttributes, MAIN_FUNCTION_NODE_ID, MemoryUnits,
-            STATIC_LINK_LOGICAL_OFFSET_IN_AST_FRAME,
         },
     },
 };
+
+// IR frame layout, in logical slots (see _ir_specs.md):
+//   slot 0                      static link
+//   slots 1 ..= sema frame_size params, then locals
+pub const STATIC_LINK_LOGICAL_OFFSET: MemoryUnits = 0;
+const RESERVED_SLOTS_BEFORE_LOCALS: MemoryUnits = 1;
 
 pub struct Lowerer {
     analysis: Analysis,
@@ -44,9 +49,7 @@ impl Lowerer {
     }
 
     fn get_next_register(&mut self) -> RegisterNumber {
-        
-        self
-            .current_function_stack
+        self.current_function_stack
             .last_mut()
             .unwrap()
             .get_next_register()
@@ -131,8 +134,7 @@ impl Lowerer {
                 self.append_instruction(StoreFromRegister(StoreFromRegisterSpec {
                     src_reg: expr_reg,
                     dst_base_reg: frame_address_reg,
-                    // The 0th offset is always reserved for static link
-                    offset: variable_location.offset_from_frame_base + 1,
+                    offset: variable_location.offset_from_frame_base + RESERVED_SLOTS_BEFORE_LOCALS,
                 }));
             }
             StatementKind::Return(expression) => {
@@ -155,7 +157,7 @@ impl Lowerer {
                 self.append_instruction(StoreFromRegister(StoreFromRegisterSpec {
                     src_reg: 0,
                     dst_base_reg: frame_address_reg,
-                    offset: STATIC_LINK_LOGICAL_OFFSET_IN_AST_FRAME,
+                    offset: STATIC_LINK_LOGICAL_OFFSET,
                 }));
 
                 for (idx, parameter) in function_definition.parameters.iter().enumerate() {
@@ -166,7 +168,7 @@ impl Lowerer {
                     self.append_instruction(StoreFromRegister(StoreFromRegisterSpec {
                         src_reg: idx + 1,
                         dst_base_reg: frame_address_reg,
-                        offset: offset + 1,
+                        offset: offset + RESERVED_SLOTS_BEFORE_LOCALS,
                     }));
                 }
 
@@ -445,7 +447,10 @@ impl Lowerer {
             }));
         }
 
-        (frame_address_reg, offset_from_frame_base + 1)
+        (
+            frame_address_reg,
+            offset_from_frame_base + RESERVED_SLOTS_BEFORE_LOCALS,
+        )
     }
 
     // How many memory units does a function take
@@ -453,9 +458,7 @@ impl Lowerer {
         if let Some(IdentifierAttributes::Function(FunctionAttributes { frame_size, .. })) =
             self.analysis.node_id_attributes.get(node_id)
         {
-            // A function always takes one more memory unit than its frame size
-            // because one is reserved for static link
-            return *frame_size + 1;
+            return *frame_size + RESERVED_SLOTS_BEFORE_LOCALS;
         };
 
         panic!("LOWERING:: No function location recorded for {node_id}");
