@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::thread;
 
-use mulang::compiler::{CodeGenerator, REQUIRED_STACK_BYTES};
+use mulang::codegen::macos_arm64::{CodeGenerator, REQUIRED_STACK_BYTES};
 use mulang::diagnostics::render_all;
 use mulang::ir::instructions::format_program;
 use mulang::ir::interpreter::IRInterpreter;
@@ -95,7 +95,7 @@ fn compile_file(path: &str, mode: Mode) -> ExitCode {
             ExitCode::FAILURE
         }
         Ok(analysis) if matches!(mode, Mode::InterpretIR | Mode::EmitIRText) => {
-            let mut lowerer = Lowerer::new(analysis);
+            let lowerer = Lowerer::new(analysis);
             let ir_program = lowerer.lower(ast);
 
             if let Mode::EmitIRText = mode {
@@ -111,12 +111,14 @@ fn compile_file(path: &str, mode: Mode) -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(analysis) => {
-            let mut code_generator = CodeGenerator::new(analysis, file_name_without_extension);
+            let lowerer = Lowerer::new(analysis);
+            let ir_program = lowerer.lower(ast);
+            let mut code_generator = CodeGenerator::new(file_name_without_extension);
 
-            match code_generator.generate(&ast) {
+            match code_generator.generate(ir_program) {
                 Ok(_) => ExitCode::SUCCESS,
-                Err(diagnostic) => {
-                    eprint!("{}", diagnostic.render(&source, path));
+                Err(err) => {
+                    eprint!("{}", err);
                     ExitCode::FAILURE
                 }
             }

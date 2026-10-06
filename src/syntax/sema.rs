@@ -9,12 +9,11 @@ use crate::{
     },
 };
 
-pub type MemoryUnits = i64;
+pub type MemoryUnits = usize;
 
 pub const MAIN_FUNCTION_NODE_ID: &str = "_main";
 pub const __DEBUG_BOL_FUNCTION_NODE_ID: &str = "__debug_bol";
-
-pub const STATIC_LINK_OFFSET: i64 = 0;
+pub const STATIC_LINK_LOGICAL_OFFSET_IN_AST_FRAME: MemoryUnits = 0;
 
 struct FunctionSymbolInfo {
     identifier: Identifier,
@@ -76,7 +75,7 @@ pub struct Counter {
 }
 
 impl Counter {
-    pub fn next(&mut self) -> usize {
+    pub fn advance(&mut self) -> usize {
         self.count += 1;
         self.count - 1
     }
@@ -101,19 +100,12 @@ pub enum IdentifierAttributes {
 }
 
 #[derive(Debug)]
+#[derive(Default)]
 pub struct Analysis {
     pub use_site_node_id_resolution_map: HashMap<String, String>,
     pub node_id_attributes: HashMap<String, IdentifierAttributes>,
 }
 
-impl Default for Analysis {
-    fn default() -> Self {
-        Self {
-            use_site_node_id_resolution_map: HashMap::new(),
-            node_id_attributes: HashMap::new(),
-        }
-    }
-}
 
 impl Analysis {
     pub fn must_get_variable_attributes_from_node_id(&self, node_id: &str) -> &VariableAttributes {
@@ -267,7 +259,7 @@ impl Sema {
         self.record_frame_location_in_analysis(String::from(MAIN_FUNCTION_NODE_ID), 0);
         self.push_scope(Scope::new(ScopeType::Function {
             node_id: String::from(MAIN_FUNCTION_NODE_ID),
-            accumulated_frame_size: 1,
+            accumulated_frame_size: 0,
         }));
 
         // DEBUG: Just add `bol` builtin so analyzer won't complain
@@ -285,33 +277,30 @@ impl Sema {
         // Pass 1
         // Process functions signatures first, so functions can be used before their definitions are set in
         for statement in &ast.block.statements {
-            match &statement.kind {
-                StatementKind::Function(FunctionDefinition {
+            if let StatementKind::Function(FunctionDefinition {
                     identifier,
                     parameters,
                     ..
-                }) => {
-                    let function_name = identifier.name.clone();
+                }) = &statement.kind {
+                let function_name = identifier.name.clone();
 
-                    if self.lookahead_function_definitions.iter().any(
-                        |pending_function_definition| {
-                            pending_function_definition.identifier.name == identifier.name
-                        },
-                    ) {
-                        self.diagnostics.push(Diagnostic::error(
-                            identifier.span,
-                            format!("SEMA:: dhanda `{function_name} has already been defined`"),
-                        ));
-                        continue;
-                    }
-
-                    self.lookahead_function_definitions
-                        .push(LookaheadFunctionDefinition {
-                            identifier: identifier.clone(),
-                            arity: parameters.len(),
-                        })
+                if self.lookahead_function_definitions.iter().any(
+                    |pending_function_definition| {
+                        pending_function_definition.identifier.name == identifier.name
+                    },
+                ) {
+                    self.diagnostics.push(Diagnostic::error(
+                        identifier.span,
+                        format!("SEMA:: dhanda `{function_name} has already been defined`"),
+                    ));
+                    continue;
                 }
-                _ => {}
+
+                self.lookahead_function_definitions
+                    .push(LookaheadFunctionDefinition {
+                        identifier: identifier.clone(),
+                        arity: parameters.len(),
+                    })
             }
         }
 
@@ -401,7 +390,7 @@ impl Sema {
 
                 self.push_scope(Scope::new(ScopeType::Function {
                     node_id: identifier.node_id.clone(),
-                    accumulated_frame_size: 1,
+                    accumulated_frame_size: 0,
                 }));
                 for parameter in parameters {
                     let parameter_name = parameter.name.clone();
@@ -467,10 +456,10 @@ impl Sema {
                 match symbol_info {
                     SymbolInfo::Function(..) => {
                         let identifier_name = identifier.name.clone();
-                        return Err(Diagnostic::error(
+                        Err(Diagnostic::error(
                             expression.span,
                             format!("Identifier {identifier_name} is a `dhanda`, not a `variable`"),
-                        ));
+                        ))
                     }
                     SymbolInfo::Variable(Identifier {
                         node_id: resolved_node_id,
@@ -522,7 +511,7 @@ impl Sema {
             }
             ExpressionKind::Call { callee, arguments } => {
                 let function_name = callee.name.clone();
-                let mut was_callee_resolved_from_scope_stack = false;
+                let mut was_callee_resolved_from_frame_stack = false;
 
                 // Check within the scope stack
                 // Scope stack takes priority over lookahead map
@@ -552,7 +541,7 @@ impl Sema {
                                     ),
                                 ));
                             }
-                            was_callee_resolved_from_scope_stack = true;
+                            was_callee_resolved_from_frame_stack = true;
                             self.analysis
                                 .use_site_node_id_resolution_map
                                 .insert(callee.node_id.clone(), identifier.node_id.clone());
@@ -562,7 +551,7 @@ impl Sema {
 
                 // Check within the lookahead definitions
                 let mut was_callee_resolved_from_lookahead_definitions = false;
-                if !was_callee_resolved_from_scope_stack
+                if !was_callee_resolved_from_frame_stack
                     && let Some(fn_definition) = self
                         .lookahead_function_definitions
                         .iter()
@@ -590,7 +579,7 @@ impl Sema {
                     );
                 }
 
-                if !was_callee_resolved_from_scope_stack
+                if !was_callee_resolved_from_frame_stack
                     && !was_callee_resolved_from_lookahead_definitions
                 {
                     return Err(Diagnostic::error(

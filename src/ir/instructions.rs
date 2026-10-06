@@ -66,14 +66,14 @@ pub struct LoadToRegisterSpec {
     pub dst_reg: RegisterNumber,
     pub src_base_reg: RegisterNumber,
     // Number of 'memory unit' offsets
-    pub offset: i64,
+    pub offset: MemoryUnits,
 }
 
 #[derive(Debug, Clone)]
 pub struct StoreFromRegisterSpec {
     pub src_reg: RegisterNumber,
     pub dst_base_reg: RegisterNumber,
-    pub offset: i64,
+    pub offset: MemoryUnits,
 }
 
 #[derive(Debug, Clone)]
@@ -120,7 +120,10 @@ pub enum Instruction {
 
 pub struct IRFunction {
     instructions: Vec<Instruction>,
-    ended: bool,
+    // Whether or not this IR function's lowering process
+    // is complete
+    is_lowering_complete: bool,
+    next_register_number: RegisterNumber,
 }
 
 impl IRFunction {
@@ -128,11 +131,22 @@ impl IRFunction {
         IRFunction {
             instructions: vec![Instruction::FunctionDefinition(FunctionDefinitionSpec {
                 node_id: String::from(node_id),
-                frame_size: frame_size,
-                argc: argc,
+                frame_size,
+                argc,
             })],
-            ended: false,
+            is_lowering_complete: false,
+            next_register_number: argc + 1,
         }
+    }
+
+    pub fn get_next_register(&mut self) -> RegisterNumber {
+        let next = self.next_register_number;
+        self.next_register_number += 1;
+        next
+    }
+
+    pub fn max_register_no(&self) -> RegisterNumber {
+        self.next_register_number - 1
     }
 
     pub fn node_id(&self) -> String {
@@ -142,12 +156,27 @@ impl IRFunction {
         panic!("First instruction of a function must be its definition")
     }
 
+    // Includes argc as well
+    pub fn frame_size(&self) -> usize {
+        if let Instruction::FunctionDefinition(definition) = &self.instructions[0] {
+            return definition.frame_size;
+        }
+        panic!("First instruction of a function must be its definition")
+    }
+
+    pub fn argc(&self) -> usize {
+        if let Instruction::FunctionDefinition(definition) = &self.instructions[0] {
+            return definition.argc;
+        }
+        panic!("First instruction of a function must be its definition")
+    }
+
     pub fn push_instruction(&mut self, i: Instruction) {
         if matches!(i, Instruction::FunctionDefinition(..)) {
             panic!("Instruction::FunctionDefinition(..) cannot be pushed")
         }
 
-        if self.ended {
+        if self.is_lowering_complete {
             panic!("Cannot push instruction to an ended function")
         }
 
@@ -155,14 +184,14 @@ impl IRFunction {
     }
 
     pub fn end(&mut self) {
-        if self.instructions.len() == 0 {
+        if self.instructions.is_empty() {
             panic!("Cannot end function before it's begun")
         }
-        self.ended = true;
+        self.is_lowering_complete = true;
     }
 
     pub fn get_instructions(&self) -> &Vec<Instruction> {
-        if !self.ended {
+        if !self.is_lowering_complete {
             panic!("Cannot get instruction from a function which has not ended")
         }
         &self.instructions
@@ -202,12 +231,8 @@ impl fmt::Display for UnaryOperation {
 }
 
 // Offsets of 0 are the default, so they are left out
-fn format_offset(offset: i64) -> String {
-    if offset == 0 {
-        String::new()
-    } else {
-        format!(", {offset}")
-    }
+fn format_offset(offset: usize) -> String {
+    format!(", {offset}")
 }
 
 impl fmt::Display for Instruction {
@@ -294,7 +319,7 @@ impl fmt::Display for Instruction {
 pub fn format_program(program: &IRProgram) -> String {
     let mut output = String::new();
 
-    for (_, ir_function) in program {
+    for ir_function in program.values() {
         for instruction in &ir_function.instructions {
             let indentation = match instruction {
                 Instruction::FunctionDefinition(_) | Instruction::Label(_) => "",

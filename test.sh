@@ -13,7 +13,8 @@ case "$*" in
         cat test.s
 
         echo "--- building ---"
-        clang -g -o test test.s
+        clang -g -c test.s -o test.o
+        clang -g test.o -o test
 
         echo "--- running ---"
         set +e
