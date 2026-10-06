@@ -55,7 +55,7 @@ impl CodeGenerator {
             let physical_frame_size =
                 calculate_physical_aligned_frame_size_in_bytes(logical_frame_size);
             self.emit_load_immediate_into_xn(to_i64(physical_frame_size), 10);
-            self.emit_line(format!("sub sp, sp, x10").as_str());
+            self.emit_line("sub sp, sp, x10");
         }
         self.emit_newline();
     }
@@ -182,7 +182,7 @@ impl CodeGenerator {
                     let static_link_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(0);
                     self.emit_load_immediate_into_xn(static_link_offset, 10);
-                    self.emit_line(&format!("str x9, [x29, x10]"));
+                    self.emit_line("str x9, [x29, x10]");
 
                     // Copy x0..x7 onto their slots
                     for i in 0..argc {
@@ -198,7 +198,7 @@ impl CodeGenerator {
                         // The 16 offset is from the native space reserved for each frame (see emit frame push assembly)
                         let argument_offset_from_old_sp = 16 + to_i64((i - 8) * 16);
                         self.emit_load_immediate_into_xn(argument_offset_from_old_sp, 11);
-                        self.emit_line(&format!("ldr x11, [x29, x11]"));
+                        self.emit_line("ldr x11, [x29, x11]");
                         self.emit_load_immediate_into_xn(offset_for_arg_reg, 10);
                         self.emit_line("str x11, [x29, x10]");
                     }
@@ -208,7 +208,7 @@ impl CodeGenerator {
                     let reg_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(*dst_reg);
                     self.emit_load_immediate_into_xn(reg_offset, 10);
-                    self.emit_line(&format!("str x0, [x29, x10]"));
+                    self.emit_line("str x0, [x29, x10]");
                 }
                 Instruction::Move(MoveSpec { dst_reg, src_reg }) => {
                     let src_reg_offset =
@@ -216,9 +216,9 @@ impl CodeGenerator {
                     let dst_reg_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(*dst_reg);
                     self.emit_load_immediate_into_xn(src_reg_offset, 10);
-                    self.emit_line(&format!("ldr x0, [x29, x10]"));
+                    self.emit_line("ldr x0, [x29, x10]");
                     self.emit_load_immediate_into_xn(dst_reg_offset, 10);
-                    self.emit_line(&format!("str x0, [x29, x10]"));
+                    self.emit_line("str x0, [x29, x10]");
                 }
                 Instruction::BinaryOp(BinaryOpSpec {
                     operation,
@@ -231,9 +231,9 @@ impl CodeGenerator {
                     let right_reg_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(*right_reg);
                     self.emit_load_immediate_into_xn(left_reg_offset, 10);
-                    self.emit_line(&format!("ldr x1, [x29, x10]"));
+                    self.emit_line("ldr x1, [x29, x10]");
                     self.emit_load_immediate_into_xn(right_reg_offset, 10);
-                    self.emit_line(&format!("ldr x2, [x29, x10]"));
+                    self.emit_line("ldr x2, [x29, x10]");
                     match operation {
                         BinaryOperation::Add => {
                             self.emit_line("add x0, x1, x2");
@@ -284,7 +284,7 @@ impl CodeGenerator {
                     let dst_reg_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(*dst_reg);
                     self.emit_load_immediate_into_xn(dst_reg_offset, 10);
-                    self.emit_line(&format!("str x0, [x29, x10]"));
+                    self.emit_line("str x0, [x29, x10]");
                 }
                 Instruction::UnaryOp(UnaryOpSpec {
                     operand_reg,
@@ -294,7 +294,7 @@ impl CodeGenerator {
                     let operand_reg_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(*operand_reg);
                     self.emit_load_immediate_into_xn(operand_reg_offset, 10);
-                    self.emit_line(&format!("ldr x1, [x29, x10]"));
+                    self.emit_line("ldr x1, [x29, x10]");
                     match operation {
                         UnaryOperation::Negate => {
                             self.emit_line("neg x0, x1");
@@ -307,7 +307,7 @@ impl CodeGenerator {
                     let dst_reg_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(*dst_reg);
                     self.emit_load_immediate_into_xn(dst_reg_offset, 10);
-                    self.emit_line(&format!("str x0, [x29, x10]"));
+                    self.emit_line("str x0, [x29, x10]");
                 }
                 Instruction::LoadToRegister(LoadToRegisterSpec {
                     dst_reg,
@@ -317,17 +317,17 @@ impl CodeGenerator {
                     let src_base_reg_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(*src_base_reg);
                     self.emit_load_immediate_into_xn(src_base_reg_offset, 10);
-                    self.emit_line(&format!("ldr x1, [x29, x10]"));
+                    self.emit_line("ldr x1, [x29, x10]");
 
                     let var_offset =
                         translate_logical_offset_to_physical_offset_for_local_variable(*offset);
                     self.emit_load_immediate_into_xn(var_offset, 10);
-                    self.emit_line(&format!("ldr x0, [x1, x10]"));
+                    self.emit_line("ldr x0, [x1, x10]");
 
                     let dst_reg_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(*dst_reg);
                     self.emit_load_immediate_into_xn(dst_reg_offset, 10);
-                    self.emit_line(&format!("str x0, [x29, x10]"));
+                    self.emit_line("str x0, [x29, x10]");
                 }
                 Instruction::StoreFromRegister(StoreFromRegisterSpec {
                     src_reg,
@@ -337,24 +337,24 @@ impl CodeGenerator {
                     let src_reg_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(*src_reg);
                     self.emit_load_immediate_into_xn(src_reg_offset, 10);
-                    self.emit_line(&format!("ldr x0, [x29, x10]"));
+                    self.emit_line("ldr x0, [x29, x10]");
 
                     let dst_base_reg_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(*dst_base_reg);
                     self.emit_load_immediate_into_xn(dst_base_reg_offset, 10);
-                    self.emit_line(&format!("ldr x1, [x29, x10]"));
+                    self.emit_line("ldr x1, [x29, x10]");
 
                     let var_offset =
                         translate_logical_offset_to_physical_offset_for_local_variable(*offset);
 
                     self.emit_load_immediate_into_xn(var_offset, 10);
-                    self.emit_line(&format!("str x0, [x1, x10]"));
+                    self.emit_line("str x0, [x1, x10]");
                 }
                 Instruction::LoadFrameAddress(LoadFrameAddressSpec { dst_reg }) => {
                     let dst_reg_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(*dst_reg);
                     self.emit_load_immediate_into_xn(dst_reg_offset, 10);
-                    self.emit_line(&format!("str x29, [x29, x10]"));
+                    self.emit_line("str x29, [x29, x10]");
                 }
                 Instruction::Label(label) => {
                     self.emit_outer_level_line(&format!("{label}:"));
@@ -370,7 +370,7 @@ impl CodeGenerator {
                     let condition_reg_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(*condition_reg);
                     self.emit_load_immediate_into_xn(condition_reg_offset, 10);
-                    self.emit_line(&format!("ldr x0, [x29, x10]"));
+                    self.emit_line("ldr x0, [x29, x10]");
                     self.emit_line(&format!("cbz x0, {}", false_label));
                     self.emit_line(&format!("b {}", true_label));
                 }
@@ -385,7 +385,7 @@ impl CodeGenerator {
                             *static_link_reg,
                         );
                     self.emit_load_immediate_into_xn(static_link_reg_offset, 10);
-                    self.emit_line(&format!("ldr x9, [x29, x10]"));
+                    self.emit_line("ldr x9, [x29, x10]");
 
                     for (i, arg_reg) in arg_regs.iter().enumerate() {
                         // for the first 8 arguments, store them directly onto the registers
@@ -413,13 +413,13 @@ impl CodeGenerator {
                     let dst_reg_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(*dst_reg);
                     self.emit_load_immediate_into_xn(dst_reg_offset, 10);
-                    self.emit_line(&format!("str x0, [x29, x10]"));
+                    self.emit_line("str x0, [x29, x10]");
                 }
                 Instruction::Return(ReturnSpec { src_reg }) => {
                     let src_reg_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(*src_reg);
                     self.emit_load_immediate_into_xn(src_reg_offset, 10);
-                    self.emit_line(&format!("ldr x0, [x29, x10]"));
+                    self.emit_line("ldr x0, [x29, x10]");
                     self.emit_frame_release_assembly();
                     self.emit_line("ret");
                 }

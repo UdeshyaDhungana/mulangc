@@ -44,12 +44,12 @@ impl Lowerer {
     }
 
     fn get_next_register(&mut self) -> RegisterNumber {
-        let last = self
+        
+        self
             .current_function_stack
             .last_mut()
             .unwrap()
-            .get_next_register();
-        last
+            .get_next_register()
     }
 
     fn append_instruction(&mut self, instruction: Instruction) {
@@ -317,7 +317,7 @@ impl Lowerer {
                     self.append_instruction(Instruction::Label(early_exit_label.clone()));
                     self.append_instruction(Instruction::Move(MoveSpec {
                         src_reg: left_reg,
-                        dst_reg: dst_reg,
+                        dst_reg,
                     }));
                     self.append_instruction(Instruction::Goto(end_label.clone()));
 

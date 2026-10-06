@@ -26,7 +26,7 @@ impl Frame {
         *(self
             .regs
             .get(&reg)
-            .expect(&format!("Register r{reg} doesn't exist")))
+            .unwrap_or_else(|| panic!("Register r{reg} doesn't exist")))
     }
 }
 
@@ -48,7 +48,7 @@ impl IRInterpreter {
     }
 
     fn pop_frame(&mut self) {
-        if self.frames.len() == 0 {
+        if self.frames.is_empty() {
             panic!("Cannot pop when there are no frames")
         }
         self.frames.pop();
@@ -57,7 +57,7 @@ impl IRInterpreter {
     fn get_frame_at_address(&mut self, addr: usize) -> &mut Frame {
         self.frames
             .get_mut(addr)
-            .expect(&format!("Frame at address {addr} doesn't exist"))
+            .unwrap_or_else(|| panic!("Frame at address {addr} doesn't exist"))
     }
 
     fn current_frame_addr(&self) -> usize {
