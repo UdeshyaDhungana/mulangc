@@ -19,6 +19,13 @@ fn <node_id>, frame_size=k, n
 
 - One `fn` header per function; functions are separated by a blank line. All functions are flat, no nesting.
 - `frame_size=k` is the frame size in slots; `n` is the param count.
+- Frame layout, in slots:
+  ```
+  0             static link
+  1 ..= n       params
+  n+1 ..< k     locals
+  ```
+  Sema numbers params and locals from 0; lowering shifts them past the static link.
 - `r0` is the static link, `r1`…`rn` are the params. Body registers start at `r(n+1)`.
 - `_main` also has `r0`, but never uses it.
 - Entry block:

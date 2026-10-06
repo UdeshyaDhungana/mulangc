@@ -156,7 +156,7 @@ impl IRFunction {
         panic!("First instruction of a function must be its definition")
     }
 
-    // Includes argc as well
+    // In slots: static link, params and locals
     pub fn frame_size(&self) -> usize {
         if let Instruction::FunctionDefinition(definition) = &self.instructions[0] {
             return definition.frame_size;

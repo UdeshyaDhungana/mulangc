@@ -13,7 +13,6 @@ pub type MemoryUnits = usize;
 
 pub const MAIN_FUNCTION_NODE_ID: &str = "_main";
 pub const __DEBUG_BOL_FUNCTION_NODE_ID: &str = "__debug_bol";
-pub const STATIC_LINK_LOGICAL_OFFSET_IN_AST_FRAME: MemoryUnits = 0;
 
 struct FunctionSymbolInfo {
     identifier: Identifier,
@@ -29,7 +28,7 @@ enum SymbolInfo {
 enum ScopeType {
     Function {
         node_id: String,
-        accumulated_frame_size: MemoryUnits,
+        variable_slot_count: MemoryUnits,
     },
     Block,
 }
@@ -89,8 +88,10 @@ pub struct VariableAttributes {
 
 #[derive(Debug)]
 pub struct FunctionAttributes {
-    pub frame_depth: usize,
-    pub frame_size: MemoryUnits,
+    // Depth of the frame the function is defined in, not of its own frame
+    pub definition_depth: usize,
+    // Params and locals; excludes the static link
+    pub variable_slot_count: MemoryUnits,
 }
 
 #[derive(Debug)]
@@ -99,13 +100,11 @@ pub enum IdentifierAttributes {
     Function(FunctionAttributes),
 }
 
-#[derive(Debug)]
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Analysis {
     pub use_site_node_id_resolution_map: HashMap<String, String>,
     pub node_id_attributes: HashMap<String, IdentifierAttributes>,
 }
-
 
 impl Analysis {
     pub fn must_get_variable_attributes_from_node_id(&self, node_id: &str) -> &VariableAttributes {
@@ -188,9 +187,9 @@ impl Sema {
             match &mut scope.scope_type {
                 ScopeType::Function {
                     node_id: frame_id,
-                    accumulated_frame_size: size,
+                    variable_slot_count,
                 } => {
-                    return (frame_id, size);
+                    return (frame_id, variable_slot_count);
                 }
                 ScopeType::Block => continue,
             }
@@ -198,7 +197,7 @@ impl Sema {
         panic!("At least one frame must exist during semantic analysis");
     }
 
-    fn frame_depth(&self) -> usize {
+    fn current_frame_depth(&self) -> usize {
         self.scopes_stack
             .iter()
             .filter(|scope| matches!(scope.scope_type, ScopeType::Function { .. }))
@@ -207,22 +206,22 @@ impl Sema {
     }
 
     // node_id means the node id of the function identifier
-    fn record_frame_location_in_analysis(&mut self, node_id: String, depth: usize) {
+    fn record_frame_location_in_analysis(&mut self, node_id: String, definition_depth: usize) {
         self.analysis.node_id_attributes.insert(
             node_id,
             IdentifierAttributes::Function(FunctionAttributes {
-                frame_depth: depth,
-                // We'll calculate the frame size once it ends
-                frame_size: 0,
+                definition_depth,
+                // Counted once the function scope is popped
+                variable_slot_count: 0,
             }),
         );
     }
 
     fn allocate_slot_for_variable_in_current_frame(&mut self, identifier: &Identifier) {
-        let depth = self.frame_depth();
-        let (_, size) = self.current_frame_mut();
-        let slot = *size;
-        *size += 1;
+        let depth = self.current_frame_depth();
+        let (_, variable_slot_count) = self.current_frame_mut();
+        let slot = *variable_slot_count;
+        *variable_slot_count += 1;
         self.analysis.node_id_attributes.insert(
             identifier.node_id.clone(),
             IdentifierAttributes::Variable(VariableAttributes {
@@ -244,7 +243,7 @@ impl Sema {
 
         let ScopeType::Function {
             node_id: frame_id,
-            accumulated_frame_size,
+            variable_slot_count,
         } = scope.scope_type
         else {
             return;
@@ -252,14 +251,14 @@ impl Sema {
 
         self.analysis
             .must_get_function_attributes_from_node_id(&frame_id)
-            .frame_size = accumulated_frame_size;
+            .variable_slot_count = variable_slot_count;
     }
 
     pub fn analyse(mut self, ast: &AST) -> Result<Analysis, Vec<Diagnostic>> {
         self.record_frame_location_in_analysis(String::from(MAIN_FUNCTION_NODE_ID), 0);
         self.push_scope(Scope::new(ScopeType::Function {
             node_id: String::from(MAIN_FUNCTION_NODE_ID),
-            accumulated_frame_size: 0,
+            variable_slot_count: 0,
         }));
 
         // DEBUG: Just add `bol` builtin so analyzer won't complain
@@ -278,17 +277,20 @@ impl Sema {
         // Process functions signatures first, so functions can be used before their definitions are set in
         for statement in &ast.block.statements {
             if let StatementKind::Function(FunctionDefinition {
-                    identifier,
-                    parameters,
-                    ..
-                }) = &statement.kind {
+                identifier,
+                parameters,
+                ..
+            }) = &statement.kind
+            {
                 let function_name = identifier.name.clone();
 
-                if self.lookahead_function_definitions.iter().any(
-                    |pending_function_definition| {
+                if self
+                    .lookahead_function_definitions
+                    .iter()
+                    .any(|pending_function_definition| {
                         pending_function_definition.identifier.name == identifier.name
-                    },
-                ) {
+                    })
+                {
                     self.diagnostics.push(Diagnostic::error(
                         identifier.span,
                         format!("SEMA:: dhanda `{function_name} has already been defined`"),
@@ -354,7 +356,7 @@ impl Sema {
                 Ok(())
             }
             StatementKind::Return(expression) => {
-                if self.frame_depth() == 0 {
+                if self.current_frame_depth() == 0 {
                     return Err(Diagnostic::error(
                         expression.span,
                         "`de` must be used inside a `dhanda`",
@@ -385,12 +387,12 @@ impl Sema {
                     .add_function_identifier(identifier, parameters.len());
                 self.record_frame_location_in_analysis(
                     identifier.node_id.clone(),
-                    self.frame_depth(),
+                    self.current_frame_depth(),
                 );
 
                 self.push_scope(Scope::new(ScopeType::Function {
                     node_id: identifier.node_id.clone(),
-                    accumulated_frame_size: 0,
+                    variable_slot_count: 0,
                 }));
                 for parameter in parameters {
                     let parameter_name = parameter.name.clone();
@@ -511,82 +513,55 @@ impl Sema {
             }
             ExpressionKind::Call { callee, arguments } => {
                 let function_name = callee.name.clone();
-                let mut was_callee_resolved_from_frame_stack = false;
 
-                // Check within the scope stack
-                // Scope stack takes priority over lookahead map
-                if let Some(symbol_info) =
-                    self.get_symbol_info_for_identifier(function_name.clone())
-                {
-                    match symbol_info {
-                        SymbolInfo::Variable(..) => {
+                // Scope stack takes priority over lookahead definitions
+                let (definition_node_id, arity) =
+                    match self.get_symbol_info_for_identifier(function_name.clone()) {
+                        Some(SymbolInfo::Variable(..)) => {
                             return Err(Diagnostic::error(
                                 expression.span,
                                 "SEMA:: Called object is not a function",
                             ));
                         }
-                        SymbolInfo::Function(FunctionSymbolInfo { arity, identifier }) => {
-                            if *arity != arguments.len() {
-                                let few_many = if arguments.len() > *arity {
-                                    "many"
-                                } else {
-                                    "few"
-                                };
-
-                                let error_pointer_span = expression.span.end - 1;
+                        Some(SymbolInfo::Function(FunctionSymbolInfo { identifier, arity })) => {
+                            (identifier.node_id.clone(), *arity)
+                        }
+                        // Not in scope yet, so it must be defined further down
+                        None => match self
+                            .lookahead_function_definitions
+                            .iter()
+                            .find(|fn_definition| fn_definition.identifier.name == function_name)
+                        {
+                            Some(fn_definition) => (
+                                fn_definition.identifier.node_id.clone(),
+                                fn_definition.arity,
+                            ),
+                            None => {
                                 return Err(Diagnostic::error(
-                                    Span::new(error_pointer_span, error_pointer_span),
-                                    format!(
-                                        "SEMA:: too {few_many} arguments in call to `{function_name}`"
-                                    ),
+                                    callee.span,
+                                    format!("SEMA:: Usage of undefined function {function_name}"),
                                 ));
                             }
-                            was_callee_resolved_from_frame_stack = true;
-                            self.analysis
-                                .use_site_node_id_resolution_map
-                                .insert(callee.node_id.clone(), identifier.node_id.clone());
-                        }
-                    }
-                }
+                        },
+                    };
 
-                // Check within the lookahead definitions
-                let mut was_callee_resolved_from_lookahead_definitions = false;
-                if !was_callee_resolved_from_frame_stack
-                    && let Some(fn_definition) = self
-                        .lookahead_function_definitions
-                        .iter()
-                        .find(|fn_definition| fn_definition.identifier.name == function_name)
-                {
-                    if fn_definition.arity != arguments.len() {
-                        let few_many = if arguments.len() > fn_definition.arity {
-                            "many"
-                        } else {
-                            "few"
-                        };
+                if arity != arguments.len() {
+                    let few_many = if arguments.len() > arity {
+                        "many"
+                    } else {
+                        "few"
+                    };
 
-                        let error_pointer_span = expression.span.end;
-                        return Err(Diagnostic::error(
-                            Span::new(error_pointer_span, error_pointer_span),
-                            format!(
-                                "too {few_many} arguments to the function in call to `{function_name}`"
-                            ),
-                        ));
-                    }
-                    was_callee_resolved_from_lookahead_definitions = true;
-                    self.analysis.use_site_node_id_resolution_map.insert(
-                        callee.node_id.clone(),
-                        fn_definition.identifier.node_id.clone(),
-                    );
-                }
-
-                if !was_callee_resolved_from_frame_stack
-                    && !was_callee_resolved_from_lookahead_definitions
-                {
+                    let error_pointer_span = expression.span.end - 1;
                     return Err(Diagnostic::error(
-                        callee.span,
-                        format!("SEMA:: Usage of undefined function {function_name}"),
+                        Span::new(error_pointer_span, error_pointer_span),
+                        format!("SEMA:: too {few_many} arguments in call to `{function_name}`"),
                     ));
                 }
+
+                self.analysis
+                    .use_site_node_id_resolution_map
+                    .insert(callee.node_id.clone(), definition_node_id);
 
                 for argument in arguments {
                     self.analyse_expression(argument)?;
