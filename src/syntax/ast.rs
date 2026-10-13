@@ -34,7 +34,7 @@ impl VariableClassification {
     }
 
     pub fn is_convertible_to(&self, target: &VariableClassification) -> bool {
-        match target {
+        match self {
             Self::IntegerType => match target {
                 Self::BooleanType => true,
                 Self::IntegerType => true,
@@ -81,7 +81,6 @@ impl VariableType {
             classification: match type_token {
                 VariableTypeToken::IntType => VariableClassification::IntegerType,
                 VariableTypeToken::BooleanType => VariableClassification::BooleanType,
-                VariableTypeToken::VoidType => VariableClassification::VoidType,
             },
         }
     }

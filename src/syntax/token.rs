@@ -3,10 +3,10 @@ use std::fmt;
 use crate::diagnostics::Span;
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::enum_variant_names)]
 pub enum VariableTypeToken {
     IntType,
     BooleanType,
-    VoidType,
     // CustomType(Identifier),
 }
 
@@ -93,7 +93,6 @@ impl Token {
         match type_str {
             "int" => Token::VariableType(VariableTypeToken::IntType),
             "bool" => Token::VariableType(VariableTypeToken::BooleanType),
-            "void" => Token::VariableType(VariableTypeToken::VoidType),
             _ => todo!("TOKEN:: custom types not supported yet"),
         }
     }
@@ -149,7 +148,6 @@ impl fmt::Display for Token {
             Token::VariableType(variable_type) => match variable_type {
                 VariableTypeToken::IntType => "int",
                 VariableTypeToken::BooleanType => "bool",
-                VariableTypeToken::VoidType => "void",
             },
 
             Token::EndOfInput => "",

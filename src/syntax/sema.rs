@@ -431,15 +431,14 @@ impl Sema {
                     ));
                 }
 
-                if expr_type != var_type.classification
-                    && !expr_type.is_convertible_to(&var_type.classification) {
-                        return Err(Diagnostic::error(
-                            identifier.span,
-                            format!(
-                                "SEMA:: Cannot assign {expr_type} to a variable of type {var_type_classification}"
-                            ),
-                        ));
-                    }
+                if !expr_type.is_convertible_to(&var_type.classification) {
+                    return Err(Diagnostic::error(
+                        identifier.span,
+                        format!(
+                            "SEMA:: Cannot assign {expr_type} to a variable of type {var_type_classification}"
+                        ),
+                    ));
+                }
 
                 self.get_current_scope()
                     .add_variable_identifier(identifier, var_type.clone());
