@@ -5,7 +5,12 @@ use crate::{
     diagnostics::{Diagnostic, Span},
     syntax::{
         AST, AssignmentTarget, Block, Conditional, Else, Expression, ExpressionKind,
-        FunctionDefinition, Identifier, Statement, StatementKind,
+        FunctionDefinition, Identifier, Statement,
+        StatementKind::{self},
+        ast::{
+            VariableClassification::{self, BooleanType, IntegerType, VoidType},
+            VariableType,
+        },
     },
 };
 
@@ -13,22 +18,37 @@ pub type MemoryUnits = usize;
 
 pub const MAIN_FUNCTION_NODE_ID: &str = "_main";
 pub const __DEBUG_BOL_FUNCTION_NODE_ID: &str = "__debug_bol";
+pub const __DEBUG_BOL_BOOL_FUNCTION_NODE_ID: &str = "__debug_bolbool";
 
+// Scope's symbol info
 struct FunctionSymbolInfo {
     identifier: Identifier,
-    arity: usize,
+    parameters_types: Vec<VariableType>,
+    return_type: VariableType,
+}
+
+struct VariableSymbolInfo {
+    identifier: Identifier,
+    var_type: VariableType,
+}
+
+impl VariableSymbolInfo {
+    fn get_classification(&self) -> VariableClassification {
+        self.var_type.classification.clone()
+    }
 }
 
 enum SymbolInfo {
     Function(FunctionSymbolInfo),
-    Variable(Identifier),
+    Variable(VariableSymbolInfo),
 }
 
 #[derive(Debug)]
 enum ScopeType {
     Function {
         node_id: String,
-        variable_slot_count: MemoryUnits,
+        memory_units_consumed: MemoryUnits,
+        return_type_classification: VariableClassification,
     },
     Block,
 }
@@ -46,19 +66,28 @@ impl Scope {
         }
     }
 
-    fn add_variable_identifier(&mut self, identifier: &Identifier) {
+    fn add_variable_identifier(&mut self, identifier: &Identifier, var_type: VariableType) {
         self.symbol_table.insert(
             identifier.name.clone(),
-            SymbolInfo::Variable(identifier.clone()),
+            SymbolInfo::Variable(VariableSymbolInfo {
+                identifier: identifier.clone(),
+                var_type,
+            }),
         );
     }
 
-    fn add_function_identifier(&mut self, identifier: &Identifier, arity: usize) {
+    fn add_function_identifier(
+        &mut self,
+        identifier: &Identifier,
+        fn_parameters_types: Vec<VariableType>,
+        return_type: VariableType,
+    ) {
         self.symbol_table.insert(
             identifier.name.clone(),
             SymbolInfo::Function(FunctionSymbolInfo {
                 identifier: identifier.clone(),
-                arity,
+                parameters_types: fn_parameters_types.clone(),
+                return_type,
             }),
         );
     }
@@ -84,14 +113,14 @@ impl Counter {
 pub struct VariableAttributes {
     pub frame_depth: usize,
     pub offset_from_frame_base: MemoryUnits,
+    pub var_type: VariableType,
 }
 
 #[derive(Debug)]
 pub struct FunctionAttributes {
     // Depth of the frame the function is defined in, not of its own frame
     pub definition_depth: usize,
-    // Params and locals; excludes the static link
-    pub variable_slot_count: MemoryUnits,
+    pub memory_units_consumed: MemoryUnits,
 }
 
 #[derive(Debug)]
@@ -139,7 +168,8 @@ impl Analysis {
 
 struct LookaheadFunctionDefinition {
     identifier: Identifier,
-    arity: usize,
+    parameter_types: Vec<VariableType>,
+    return_type: VariableType,
 }
 
 pub struct Sema {
@@ -171,7 +201,22 @@ impl Sema {
             .expect("At least one scope must exist during semantic analysis")
     }
 
-    fn get_symbol_info_for_identifier(&self, identifier_name: String) -> Option<&SymbolInfo> {
+    fn get_current_frame(&mut self) -> &mut Scope {
+        self.scopes_stack
+            .iter_mut()
+            .rfind(|scope| matches!(scope.scope_type, ScopeType::Function { .. }))
+            .expect("At least one scope must exist during semantic analysis")
+    }
+
+    fn get_current_frame_depth(&self) -> usize {
+        self.scopes_stack
+            .iter()
+            .filter(|scope| matches!(scope.scope_type, ScopeType::Function { .. }))
+            .count()
+            - 1
+    }
+
+    fn lookup_syminfo_for_identifier(&self, identifier_name: String) -> Option<&SymbolInfo> {
         for stack in self.scopes_stack.iter().rev() {
             if let Some(symbol_info) = stack.symbol_table.get(&identifier_name.clone()) {
                 return Some(symbol_info);
@@ -182,29 +227,6 @@ impl Sema {
         None
     }
 
-    fn current_frame_mut(&mut self) -> (&String, &mut MemoryUnits) {
-        for scope in self.scopes_stack.iter_mut().rev() {
-            match &mut scope.scope_type {
-                ScopeType::Function {
-                    node_id: frame_id,
-                    variable_slot_count,
-                } => {
-                    return (frame_id, variable_slot_count);
-                }
-                ScopeType::Block => continue,
-            }
-        }
-        panic!("At least one frame must exist during semantic analysis");
-    }
-
-    fn current_frame_depth(&self) -> usize {
-        self.scopes_stack
-            .iter()
-            .filter(|scope| matches!(scope.scope_type, ScopeType::Function { .. }))
-            .count()
-            - 1
-    }
-
     // node_id means the node id of the function identifier
     fn record_frame_location_in_analysis(&mut self, node_id: String, definition_depth: usize) {
         self.analysis.node_id_attributes.insert(
@@ -212,21 +234,33 @@ impl Sema {
             IdentifierAttributes::Function(FunctionAttributes {
                 definition_depth,
                 // Counted once the function scope is popped
-                variable_slot_count: 0,
+                memory_units_consumed: 0,
             }),
         );
     }
 
-    fn allocate_slot_for_variable_in_current_frame(&mut self, identifier: &Identifier) {
-        let depth = self.current_frame_depth();
-        let (_, variable_slot_count) = self.current_frame_mut();
-        let slot = *variable_slot_count;
-        *variable_slot_count += 1;
+    fn allocate_slot_for_variable_in_current_frame(
+        &mut self,
+        identifier: &Identifier,
+        var_type: VariableType,
+    ) {
+        let depth = self.get_current_frame_depth();
+        let enclosing_frame = self.get_current_frame();
+        let ScopeType::Function {
+            memory_units_consumed,
+            ..
+        } = &mut enclosing_frame.scope_type
+        else {
+            panic!("Enclosing frame must be a function scope")
+        };
+        let previously_consumed = *memory_units_consumed;
+        *memory_units_consumed += var_type.size();
         self.analysis.node_id_attributes.insert(
             identifier.node_id.clone(),
             IdentifierAttributes::Variable(VariableAttributes {
                 frame_depth: depth,
-                offset_from_frame_base: slot,
+                offset_from_frame_base: previously_consumed,
+                var_type,
             }),
         );
     }
@@ -243,24 +277,20 @@ impl Sema {
 
         let ScopeType::Function {
             node_id: frame_id,
-            variable_slot_count,
+            memory_units_consumed: variable_slot_count,
+            ..
         } = scope.scope_type
         else {
             return;
         };
 
-        self.analysis
-            .must_get_function_attributes_from_node_id(&frame_id)
-            .variable_slot_count = variable_slot_count;
+        let popped_fn_attributes = self
+            .analysis
+            .must_get_function_attributes_from_node_id(&frame_id);
+        popped_fn_attributes.memory_units_consumed = variable_slot_count;
     }
 
-    pub fn analyse(mut self, ast: &AST) -> Result<Analysis, Vec<Diagnostic>> {
-        self.record_frame_location_in_analysis(String::from(MAIN_FUNCTION_NODE_ID), 0);
-        self.push_scope(Scope::new(ScopeType::Function {
-            node_id: String::from(MAIN_FUNCTION_NODE_ID),
-            variable_slot_count: 0,
-        }));
-
+    fn add_debug_builtins(&mut self) {
         // DEBUG: Just add `bol` builtin so analyzer won't complain
         self.get_current_scope().add_function_identifier(
             &Identifier {
@@ -268,10 +298,45 @@ impl Sema {
                 node_id: String::from(__DEBUG_BOL_FUNCTION_NODE_ID),
                 span: Span::new(0, 0),
             },
-            1,
+            vec![VariableType {
+                span: Span::new(0, 0),
+                classification: IntegerType,
+            }],
+            VariableType {
+                span: Span::new(0, 0),
+                classification: VariableClassification::VoidType,
+            },
         );
         self.record_frame_location_in_analysis(String::from(__DEBUG_BOL_FUNCTION_NODE_ID), 0);
-        // END DEBUG
+
+        // Add bol for bool type as well
+        self.get_current_scope().add_function_identifier(
+            &Identifier {
+                name: String::from("bolbool"),
+                node_id: String::from(__DEBUG_BOL_BOOL_FUNCTION_NODE_ID),
+                span: Span::new(0, 0),
+            },
+            vec![VariableType {
+                span: Span::new(0, 0),
+                classification: BooleanType,
+            }],
+            VariableType {
+                span: Span::new(0, 0),
+                classification: VariableClassification::VoidType,
+            },
+        );
+        self.record_frame_location_in_analysis(String::from(__DEBUG_BOL_BOOL_FUNCTION_NODE_ID), 0);
+    }
+
+    pub fn analyse(mut self, ast: &AST) -> Result<Analysis, Vec<Diagnostic>> {
+        self.record_frame_location_in_analysis(String::from(MAIN_FUNCTION_NODE_ID), 0);
+        self.push_scope(Scope::new(ScopeType::Function {
+            node_id: String::from(MAIN_FUNCTION_NODE_ID),
+            memory_units_consumed: 0,
+            return_type_classification: VariableClassification::IntegerType,
+        }));
+
+        self.add_debug_builtins();
 
         // Pass 1
         // Process functions signatures first, so functions can be used before their definitions are set in
@@ -279,6 +344,7 @@ impl Sema {
             if let StatementKind::Function(FunctionDefinition {
                 identifier,
                 parameters,
+                return_type,
                 ..
             }) = &statement.kind
             {
@@ -301,7 +367,8 @@ impl Sema {
                 self.lookahead_function_definitions
                     .push(LookaheadFunctionDefinition {
                         identifier: identifier.clone(),
-                        arity: parameters.len(),
+                        parameter_types: parameters.iter().map(|p| p.var_type.clone()).collect(),
+                        return_type: return_type.clone(),
                     })
             }
         }
@@ -337,8 +404,12 @@ impl Sema {
 
     fn analyse_statement(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
         match &statement.kind {
-            StatementKind::Declaration { identifier, value } => {
-                self.analyse_expression(value)?;
+            StatementKind::Declaration {
+                identifier,
+                value,
+                var_type,
+            } => {
+                let expr_type = self.analyse_expression(value)?;
                 let identifier_name = identifier.name.clone();
 
                 if self
@@ -351,24 +422,64 @@ impl Sema {
                     ));
                 }
 
-                self.get_current_scope().add_variable_identifier(identifier);
-                self.allocate_slot_for_variable_in_current_frame(identifier);
+                let var_type_classification = var_type.classification.clone();
+
+                if var_type_classification == VoidType {
+                    return Err(Diagnostic::error(
+                        identifier.span,
+                        "SEMA:: `void` is not assignable".to_string(),
+                    ));
+                }
+
+                if !expr_type.is_convertible_to(&var_type.classification) {
+                    return Err(Diagnostic::error(
+                        identifier.span,
+                        format!(
+                            "SEMA:: Cannot assign {expr_type} to a variable of type {var_type_classification}"
+                        ),
+                    ));
+                }
+
+                self.get_current_scope()
+                    .add_variable_identifier(identifier, var_type.clone());
+                self.allocate_slot_for_variable_in_current_frame(identifier, var_type.clone());
                 Ok(())
             }
             StatementKind::Return(expression) => {
-                if self.current_frame_depth() == 0 {
+                if self.get_current_frame_depth() == 0 {
                     return Err(Diagnostic::error(
                         expression.span,
                         "`de` must be used inside a `dhanda`",
                     ));
                 }
 
-                self.analyse_expression(expression)
+                let expr_classficiation = self.analyse_expression(expression)?;
+                let enclosing_function_scope = self.get_current_frame();
+                let ScopeType::Function {
+                    return_type_classification,
+                    ..
+                } = &enclosing_function_scope.scope_type
+                else {
+                    panic!("Enclosing function scope must be a function scope");
+                };
+
+                if *return_type_classification != expr_classficiation {
+                    return Err(Diagnostic::error(
+                        expression.span,
+                        format!(
+                            "Expected return type to be {}, got {}",
+                            return_type_classification, expr_classficiation,
+                        ),
+                    ));
+                }
+                Ok(())
             }
             StatementKind::Function(FunctionDefinition {
                 identifier,
                 body,
                 parameters,
+                return_type,
+                ..
             }) => {
                 let function_name = identifier.name.clone();
 
@@ -382,20 +493,26 @@ impl Sema {
                     ));
                 }
 
+                self.get_current_scope().add_function_identifier(
+                    identifier,
+                    parameters.iter().map(|p| p.var_type.clone()).collect(),
+                    return_type.clone(),
+                );
+
                 // We should allow recursive calls, so register early
-                self.get_current_scope()
-                    .add_function_identifier(identifier, parameters.len());
                 self.record_frame_location_in_analysis(
                     identifier.node_id.clone(),
-                    self.current_frame_depth(),
+                    self.get_current_frame_depth(),
                 );
 
                 self.push_scope(Scope::new(ScopeType::Function {
                     node_id: identifier.node_id.clone(),
-                    variable_slot_count: 0,
+                    memory_units_consumed: 0,
+                    return_type_classification: return_type.classification.clone(),
                 }));
                 for parameter in parameters {
-                    let parameter_name = parameter.name.clone();
+                    let parameter_name = parameter.identifier.name.clone();
+                    let param_type = parameter.var_type.clone();
                     // Each parameter identifier must be unique
                     if self
                         .get_current_scope()
@@ -406,10 +523,35 @@ impl Sema {
                             format!("SEMA:: Identifier {parameter_name} has already been declared"),
                         ));
                     }
-                    self.get_current_scope().add_variable_identifier(parameter);
-                    self.allocate_slot_for_variable_in_current_frame(parameter);
+                    self.get_current_scope()
+                        .add_variable_identifier(&parameter.identifier, param_type.clone());
+                    self.allocate_slot_for_variable_in_current_frame(
+                        &parameter.identifier,
+                        param_type,
+                    );
                 }
+                self.get_current_scope().add_function_identifier(
+                    identifier,
+                    parameters.iter().map(|t| t.var_type.clone()).collect(),
+                    return_type.clone(),
+                );
                 self.analyse_statements_collecting_diagnostics(&body.statements);
+
+                // If a function has a non-void return type
+                // but if any of the control flow paths does not produce
+                // a return statement, emit an error
+                // Type checking is not needed here since it's captured in the
+                // analysis of each return statement
+                if !self.does_block_definitely_return(body)
+                    && return_type.classification != VariableClassification::VoidType
+                {
+                    // C style error diagnostic
+                    let body_end_span = body.span.end;
+                    return Err(Diagnostic::error(
+                        Span::new(body_end_span, body_end_span),
+                        "non-void function does not return a value in all control paths",
+                    ));
+                }
                 self.pop_scope();
                 Ok(())
             }
@@ -439,15 +581,20 @@ impl Sema {
                 self.pop_scope();
                 Ok(())
             }
-            StatementKind::Expression(expression) => self.analyse_expression(expression),
+            StatementKind::Expression(expression) => {
+                self.analyse_expression(expression)?;
+                Ok(())
+            }
         }
     }
 
-    fn analyse_expression(&mut self, expression: &Expression) -> Result<(), Diagnostic> {
+    fn analyse_expression(
+        &mut self,
+        expression: &Expression,
+    ) -> Result<VariableClassification, Diagnostic> {
         match &expression.kind {
             ExpressionKind::Identifier(identifier) => {
-                let Some(symbol_info) =
-                    self.get_symbol_info_for_identifier(identifier.name.clone())
+                let Some(symbol_info) = self.lookup_syminfo_for_identifier(identifier.name.clone())
                 else {
                     return Err(Diagnostic::error(
                         expression.span,
@@ -463,29 +610,30 @@ impl Sema {
                             format!("Identifier {identifier_name} is a `dhanda`, not a `variable`"),
                         ))
                     }
-                    SymbolInfo::Variable(Identifier {
-                        node_id: resolved_node_id,
-                        ..
-                    }) => {
+                    SymbolInfo::Variable(var_symbol_info) => {
+                        let declaration_node_id = var_symbol_info.identifier.node_id.clone();
+                        let declaration_classification = var_symbol_info.get_classification();
                         self.analysis
                             .use_site_node_id_resolution_map
-                            .insert(identifier.node_id.clone(), resolved_node_id.clone());
-                        Ok(())
+                            .insert(identifier.node_id.clone(), declaration_node_id);
+                        Ok(declaration_classification)
                     }
                 }
             }
-            ExpressionKind::Integer(..) => Ok(()),
+            ExpressionKind::Integer(..) => Ok(IntegerType),
             ExpressionKind::UnaryOperation { operand, .. } => self.analyse_expression(operand),
             ExpressionKind::BinaryOperation { left, right, .. } => {
-                self.analyse_expression(left)?;
-                self.analyse_expression(right)?;
-                Ok(())
+                let left_type = self.analyse_expression(left)?;
+                let right_type = self.analyse_expression(right)?;
+                if left_type != right_type {
+                    panic!("Coercion is not supported at the moment")
+                }
+                Ok(left_type)
             }
             ExpressionKind::Assignment { target, value } => {
-                self.analyse_expression(value)?;
+                let expr_classification = self.analyse_expression(value)?;
                 let AssignmentTarget::Variable(identifier) = target;
-                let Some(symbol_info) =
-                    self.get_symbol_info_for_identifier(identifier.name.clone())
+                let Some(symbol_info) = self.lookup_syminfo_for_identifier(identifier.name.clone())
                 else {
                     return Err(Diagnostic::error(
                         identifier.span,
@@ -500,53 +648,74 @@ impl Sema {
                             format!("Cannot assign to {variable_name} of `dhanda` type"),
                         ));
                     }
-                    SymbolInfo::Variable(Identifier {
-                        node_id: resolved_node_id,
-                        ..
-                    }) => {
-                        self.analysis
-                            .use_site_node_id_resolution_map
-                            .insert(identifier.node_id.clone(), resolved_node_id.clone());
+                    SymbolInfo::Variable(variable_sym_info) => {
+                        let resolved_identifier = variable_sym_info.identifier.clone();
+                        let target_type = variable_sym_info.var_type.clone();
+
+                        if variable_sym_info.var_type.classification != expr_classification {
+                            return Err(Diagnostic::error(
+                                resolved_identifier.span,
+                                format!(
+                                    "Cannot assign expression of type {expr_classification} to variable {resolved_identifier} of type {target_type}"
+                                ),
+                            ));
+                        }
+
+                        self.analysis.use_site_node_id_resolution_map.insert(
+                            identifier.node_id.clone(),
+                            resolved_identifier.node_id.clone(),
+                        );
                     }
                 }
-                Ok(())
+                Ok(expr_classification)
             }
             ExpressionKind::Call { callee, arguments } => {
                 let function_name = callee.name.clone();
+                let return_value_type: VariableClassification;
 
                 // Scope stack takes priority over lookahead definitions
-                let (definition_node_id, arity) =
-                    match self.get_symbol_info_for_identifier(function_name.clone()) {
-                        Some(SymbolInfo::Variable(..)) => {
+                let (definition_node_id, param_types) = match self
+                    .lookup_syminfo_for_identifier(function_name.clone())
+                {
+                    Some(SymbolInfo::Variable(..)) => {
+                        return Err(Diagnostic::error(
+                            expression.span,
+                            "SEMA:: Called object is not a function",
+                        ));
+                    }
+                    Some(SymbolInfo::Function(FunctionSymbolInfo {
+                        identifier,
+                        parameters_types,
+                        return_type,
+                    })) => {
+                        return_value_type = return_type.classification.clone();
+                        (identifier.node_id.clone(), parameters_types.clone())
+                    }
+                    // Not in scope yet, so it must be defined further down
+                    None => match self
+                        .lookahead_function_definitions
+                        .iter()
+                        .find(|fn_definition| fn_definition.identifier.name == function_name)
+                    {
+                        Some(fn_definition) => {
+                            return_value_type = fn_definition.return_type.classification.clone();
+                            (
+                                fn_definition.identifier.node_id.clone(),
+                                fn_definition.parameter_types.clone(),
+                            )
+                        }
+                        None => {
                             return Err(Diagnostic::error(
-                                expression.span,
-                                "SEMA:: Called object is not a function",
+                                callee.span,
+                                format!("SEMA:: Usage of undefined function {function_name}"),
                             ));
                         }
-                        Some(SymbolInfo::Function(FunctionSymbolInfo { identifier, arity })) => {
-                            (identifier.node_id.clone(), *arity)
-                        }
-                        // Not in scope yet, so it must be defined further down
-                        None => match self
-                            .lookahead_function_definitions
-                            .iter()
-                            .find(|fn_definition| fn_definition.identifier.name == function_name)
-                        {
-                            Some(fn_definition) => (
-                                fn_definition.identifier.node_id.clone(),
-                                fn_definition.arity,
-                            ),
-                            None => {
-                                return Err(Diagnostic::error(
-                                    callee.span,
-                                    format!("SEMA:: Usage of undefined function {function_name}"),
-                                ));
-                            }
-                        },
-                    };
+                    },
+                };
 
-                if arity != arguments.len() {
-                    let few_many = if arguments.len() > arity {
+                let fn_arity = param_types.len();
+                if fn_arity != arguments.len() {
+                    let few_many = if arguments.len() > fn_arity {
                         "many"
                     } else {
                         "few"
@@ -559,14 +728,27 @@ impl Sema {
                     ));
                 }
 
+                // Compare the types
+                for i in 0..fn_arity {
+                    let arg = &arguments[i];
+                    let arg_type = self.analyse_expression(arg)?;
+                    let param_type = &param_types[i];
+                    if arg_type != param_type.classification {
+                        return Err(Diagnostic::error(
+                            arg.span,
+                            format!(
+                                "SEMA:: Expected argument to be of type {}, got {}",
+                                param_type, arg_type
+                            ),
+                        ));
+                    }
+                }
+
                 self.analysis
                     .use_site_node_id_resolution_map
                     .insert(callee.node_id.clone(), definition_node_id);
 
-                for argument in arguments {
-                    self.analyse_expression(argument)?;
-                }
-                Ok(())
+                Ok(return_value_type)
             }
         }
     }
@@ -583,6 +765,42 @@ impl Sema {
         }
 
         Ok(())
+    }
+
+    /* Return paths analysis */
+
+    fn does_conditional_definitely_return(&mut self, c: &Conditional) -> bool {
+        // An if statement without an else can't be distinguished as
+        // definitely returnable
+        let Some(else_block) = &c.otherwise else {
+            return false;
+        };
+
+        match else_block.deref() {
+            Else::If(conditional) => self.does_conditional_definitely_return(conditional),
+            Else::Block(b) => self.does_block_definitely_return(b),
+        }
+    }
+
+    fn does_stmt_definitely_return(&mut self, stmt: &Statement) -> bool {
+        match &stmt.kind {
+            StatementKind::Declaration { .. } => false,
+            StatementKind::Return(..) => true,
+            StatementKind::Expression(..) => false,
+            StatementKind::Function(..) => false,
+            StatementKind::If(conditional) => self.does_conditional_definitely_return(conditional),
+            StatementKind::While { .. } => false,
+            StatementKind::For { .. } => false,
+        }
+    }
+
+    fn does_block_definitely_return(&mut self, block: &Block) -> bool {
+        for statement in &block.statements {
+            if self.does_stmt_definitely_return(statement) {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -620,115 +838,133 @@ mod tests {
     /* ------------------------------------------------------------ accepted */
 
     #[test]
-    fn a_program_that_is_only_a_main_function() {
-        accepts("dhanda muji() { }");
+    fn a_program_that_is_only_a_runner_function() {
+        accepts("dhanda run() { }");
     }
 
     #[test]
     fn a_variable_is_visible_after_its_declaration() {
-        accepts("dhanda muji() { thoos x = 1; x; }");
+        accepts("dhanda run() { thoos x: int = 1; x; }");
     }
 
     #[test]
     fn a_top_level_variable_is_visible_inside_a_function() {
-        accepts("thoos g = 1; dhanda muji() { g; }");
+        accepts("thoos g: int = 1; dhanda run() { g; }");
     }
 
     #[test]
     fn a_parameter_is_visible_inside_the_body() {
-        accepts("dhanda muji() { } dhanda f(a) { a; }");
+        accepts("dhanda f(a: int) { a; }");
     }
 
     #[test]
     fn a_call_whose_argument_count_matches() {
-        accepts("dhanda add(a, b) { de 1; } dhanda muji() { add(1, 2); }");
+        accepts("dhanda add(a: int, b: int) int { de 1; } dhanda run() { add(1, 2); }");
     }
 
     #[test]
     fn a_function_may_call_itself() {
-        accepts("dhanda muji() { } dhanda fac(n) { de fac(1); }");
+        accepts("dhanda fac(n: int) int { de fac(1); }");
     }
 
     #[test]
     fn a_function_may_call_one_defined_later() {
-        accepts("dhanda muji() { } dhanda a() { de b(); } dhanda b() { de 1; }");
+        accepts("dhanda a() int { de b(); } dhanda b() int { de 1; }");
     }
 
     #[test]
     fn two_top_level_functions_may_call_each_other() {
         accepts(
-            "dhanda muji() { } \
-             dhanda is_even(n) { de is_odd(n - 1); } \
-             dhanda is_odd(n) { de is_even(n - 1); }",
+            "dhanda is_even(n: int) int { de is_odd(n - 1); } \
+             dhanda is_odd(n: int) int { de is_even(n - 1); }",
         );
     }
 
     #[test]
-    fn main_may_call_a_function_defined_below_it() {
-        accepts("dhanda muji() { bol(later()); } dhanda later() { de 1; }");
+    fn a_runner_may_call_a_function_defined_below_it() {
+        accepts("dhanda run() { bol(later()); } dhanda later() int { de 1; }");
     }
 
     #[test]
     fn a_forward_call_still_has_its_arity_checked() {
         rejects(
-            "dhanda muji() { add(1); } dhanda add(a, b) { de a + b; }",
+            "dhanda run() { add(1); } dhanda add(a: int, b: int) int { de a + b; }",
             "too few arguments",
         );
     }
 
     #[test]
     fn a_builtin_is_callable_from_inside_a_function() {
-        accepts("dhanda muji() { bol(1); }");
+        accepts("dhanda run() { bol(1); }");
     }
 
     #[test]
     fn an_inner_block_may_reuse_an_outer_name() {
-        accepts("dhanda muji() { thoos x = 1; yedi (1) { thoos x = 2; } }");
+        accepts("dhanda run() { thoos x: int = 1; yedi (1) { thoos x: int = 2; } }");
     }
 
     #[test]
     fn a_dhanda_may_be_declared_inside_a_dhanda() {
-        accepts("dhanda muji() { dhanda inner() { de 1; } }");
+        accepts("dhanda run() { dhanda inner() int { de 1; } }");
     }
 
     #[test]
     fn a_dhanda_may_be_declared_inside_a_block() {
-        accepts("dhanda muji() { yedi (1) { dhanda inner() { de 1; } } }");
-        accepts("dhanda muji() { jabasamma (1) { dhanda inner() { de 1; } } }");
+        accepts("dhanda run() { yedi (1) { dhanda inner() int { de 1; } } }");
+        accepts("dhanda run() { jabasamma (1) { dhanda inner() int { de 1; } } }");
     }
 
     #[test]
     fn a_nested_dhanda_is_callable_after_its_definition() {
-        accepts("dhanda muji() { dhanda inner(a) { de a; } bol(inner(1)); }");
+        accepts("dhanda run() { dhanda inner(a: int) int { de a; } bol(inner(1)); }");
     }
 
     #[test]
     fn a_nested_dhanda_may_call_itself() {
-        accepts("dhanda muji() { dhanda inner(n) { de inner(n - 1); } }");
+        accepts("dhanda run() { dhanda inner(n: int) int { de inner(n - 1); } }");
     }
 
     #[test]
     fn a_nested_dhanda_may_read_its_enclosing_dhandas_variables() {
-        accepts("dhanda muji() { thoos x = 1; dhanda inner() { de x; } }");
-        accepts("dhanda muji() { dhanda outer(a) { dhanda inner() { de a; } } }");
+        accepts("dhanda run() { thoos x: int = 1; dhanda inner() int { de x; } }");
+        accepts("dhanda run() { dhanda outer(a: int) { dhanda inner() int { de a; } } }");
     }
 
     #[test]
     fn a_nested_dhanda_may_call_a_global_dhanda() {
-        accepts("dhanda muji() { dhanda inner() { de later(); } } dhanda later() { de 1; }");
+        accepts("dhanda run() { dhanda inner() int { de later(); } } dhanda later() int { de 1; }");
     }
 
     #[test]
     fn a_nested_dhanda_may_shadow_a_global_dhanda() {
-        accepts("dhanda f() { de 1; } dhanda muji() { dhanda f(a) { de a; } f(1); }");
+        accepts("dhanda f() int { de 1; } dhanda run() { dhanda f(a: int) int { de a; } f(1); }");
     }
 
     #[test]
     fn two_dhandas_may_each_nest_a_dhanda_of_the_same_name() {
         accepts(
-            "dhanda muji() { dhanda inner() { de 1; } } \
-             dhanda other() { dhanda inner() { de 2; } }",
+            "dhanda run() { dhanda inner() int { de 1; } } \
+             dhanda other() { dhanda inner() int { de 2; } }",
         );
+    }
+
+    #[test]
+    fn a_void_function_may_fall_off_the_end() {
+        accepts("dhanda nothing() { } nothing();");
+        accepts(
+            "dhanda after_while(n: int) { \
+             thoos i: int = 0; jabasamma (i < n) { i = i + 1; } bol(i); } \
+             after_while(4);",
+        );
+    }
+
+    #[test]
+    fn a_non_void_function_that_returns_on_every_path() {
+        accepts("dhanda both_arms(n: int) int { yedi (n > 0) { de 1; } natra { de 2; } }");
+        accepts(
+            "dhanda sign(n: int) int { yedi (n > 0) { de 1; } natra yedi (n < 0) { de -1; } natra { de 0; } }",
+        );
+        accepts("dhanda only_positive(n: int) int { yedi (n > 0) { de n; } de 0; }");
     }
 
     /* ------------------------------------------------------------ rejected */
@@ -736,7 +972,7 @@ mod tests {
     #[test]
     fn a_nested_dhanda_is_not_visible_outside_its_enclosing_dhanda() {
         rejects(
-            "dhanda muji() { inner(); } dhanda other() { dhanda inner() { de 1; } }",
+            "dhanda run() { inner(); } dhanda other() { dhanda inner() int { de 1; } }",
             "inner",
         );
     }
@@ -744,7 +980,7 @@ mod tests {
     #[test]
     fn a_nested_dhanda_is_not_visible_outside_its_block() {
         rejects(
-            "dhanda muji() { yedi (1) { dhanda inner() { de 1; } } inner(); }",
+            "dhanda run() { yedi (1) { dhanda inner() int { de 1; } } inner(); }",
             "inner",
         );
     }
@@ -752,7 +988,7 @@ mod tests {
     #[test]
     fn two_nested_dhandas_with_the_same_name_in_one_scope() {
         rejects(
-            "dhanda muji() { dhanda inner() { de 1; } dhanda inner() { de 2; } }",
+            "dhanda run() { dhanda inner() int { de 1; } dhanda inner() int { de 2; } }",
             "already been declared",
         );
     }
@@ -760,7 +996,7 @@ mod tests {
     #[test]
     fn a_nested_dhanda_and_a_variable_with_the_same_name_in_one_scope() {
         rejects(
-            "dhanda muji() { thoos inner = 1; dhanda inner() { de 1; } }",
+            "dhanda run() { thoos inner: int = 1; dhanda inner() int { de 1; } }",
             "already been declared",
         );
     }
@@ -768,20 +1004,20 @@ mod tests {
     #[test]
     fn a_nested_dhanda_still_has_its_arity_checked() {
         rejects(
-            "dhanda muji() { dhanda inner(a, b) { de a; } inner(1); }",
+            "dhanda run() { dhanda inner(a: int, b: int) int { de a; } inner(1); }",
             "too few arguments",
         );
     }
 
     #[test]
-    fn a_program_without_a_muji_is_accepted() {
-        accepts("thoos x = 1;");
+    fn a_program_without_a_runner_is_accepted() {
+        accepts("thoos x: int = 1;");
     }
 
     #[test]
     fn two_declarations_of_one_name_in_the_same_scope() {
         rejects(
-            "dhanda muji() { } thoos x = 1; thoos x = 2;",
+            "thoos x: int = 1; thoos x: int = 2;",
             "already been declared",
         );
     }
@@ -789,7 +1025,7 @@ mod tests {
     #[test]
     fn two_functions_with_the_same_name() {
         rejects(
-            "dhanda muji() { } dhanda f() { de 1; } dhanda f() { de 2; }",
+            "dhanda f() int { de 1; } dhanda f() int { de 2; }",
             "already been defined",
         );
     }
@@ -797,81 +1033,81 @@ mod tests {
     #[test]
     fn a_parameter_name_repeated() {
         rejects(
-            "dhanda muji() { } dhanda f(a, a) { de 1; }",
+            "dhanda f(a: int, a: int) int { de 1; }",
             "already been declared",
         );
     }
 
     #[test]
     fn an_undefined_name_on_its_own() {
-        rejects("dhanda muji() { nope; }", "nope");
+        rejects("dhanda run() { nope; }", "nope");
     }
 
     #[test]
     fn an_undefined_name_in_a_declaration_value() {
-        rejects("dhanda muji() { thoos x = nope; }", "nope");
+        rejects("dhanda run() { thoos x: int = nope; }", "nope");
     }
 
     #[test]
     fn an_undefined_name_in_a_binary_operation() {
-        rejects("dhanda muji() { thoos x = nope + 1; }", "nope");
+        rejects("dhanda run() { thoos x: int = nope + 1; }", "nope");
     }
 
     #[test]
     fn an_undefined_name_in_a_unary_operation() {
-        rejects("dhanda muji() { thoos x = -nope; }", "nope");
+        rejects("dhanda run() { thoos x: int = -nope; }", "nope");
     }
 
     #[test]
     fn a_global_may_be_initialised_from_another_global() {
-        accepts("dhanda muji() { } thoos a = 1; thoos b = a;");
-        accepts("dhanda muji() { } thoos a = 1; thoos b = a + 1;");
+        accepts("thoos a: int = 1; thoos b: int = a;");
+        accepts("thoos a: int = 1; thoos b: int = a + 1;");
     }
 
     #[test]
     fn an_undefined_name_as_an_assignment_target() {
-        rejects("dhanda muji() { nope = 1; }", "nope");
+        rejects("dhanda run() { nope = 1; }", "nope");
     }
 
     #[test]
     fn an_undefined_name_in_an_assigned_value() {
-        rejects("dhanda muji() { thoos x = 1; x = nope; }", "nope");
+        rejects("dhanda run() { thoos x: int = 1; x = nope; }", "nope");
     }
 
     #[test]
     fn an_undefined_name_in_a_conditional() {
-        rejects("dhanda muji() { yedi (nope) { 1; } }", "nope");
-        rejects("dhanda muji() { yedi (1) { nope; } }", "nope");
-        rejects("dhanda muji() { yedi (1) { 1; } natra { nope; } }", "nope");
+        rejects("dhanda run() { yedi (nope) { 1; } }", "nope");
+        rejects("dhanda run() { yedi (1) { nope; } }", "nope");
+        rejects("dhanda run() { yedi (1) { 1; } natra { nope; } }", "nope");
     }
 
     #[test]
     fn an_undefined_name_in_a_while_loop() {
-        rejects("dhanda muji() { jabasamma (nope) { 1; } }", "nope");
-        rejects("dhanda muji() { jabasamma (1) { nope; } }", "nope");
+        rejects("dhanda run() { jabasamma (nope) { 1; } }", "nope");
+        rejects("dhanda run() { jabasamma (1) { nope; } }", "nope");
     }
 
     #[test]
     fn an_undefined_name_in_a_for_loop() {
         rejects(
-            "dhanda muji() { fanfani (thoos i = 0; 1; i) { nope; } }",
+            "dhanda run() { fanfani (thoos i: int = 0; 1; i) { nope; } }",
             "nope",
         );
         rejects(
-            "dhanda muji() { fanfani (thoos i = 0; nope; i) { 1; } }",
+            "dhanda run() { fanfani (thoos i: int = 0; nope; i) { 1; } }",
             "nope",
         );
     }
 
     #[test]
     fn a_call_to_an_undefined_function() {
-        rejects("dhanda muji() { nope(1); }", "nope");
+        rejects("dhanda run() { nope(1); }", "nope");
     }
 
     #[test]
     fn a_call_with_too_few_arguments() {
         rejects(
-            "dhanda add(a, b) { de 1; } dhanda muji() { add(1); }",
+            "dhanda add(a: int, b: int) int { de 1; } dhanda run() { add(1); }",
             "too few arguments",
         );
     }
@@ -879,40 +1115,87 @@ mod tests {
     #[test]
     fn a_call_with_too_many_arguments() {
         rejects(
-            "dhanda add(a, b) { de 1; } dhanda muji() { add(1, 2, 3); }",
+            "dhanda add(a: int, b: int) int { de 1; } dhanda run() { add(1, 2, 3); }",
             "too many arguments",
         );
     }
 
     #[test]
     fn a_call_to_something_that_is_not_a_function() {
-        rejects("dhanda muji() { thoos x = 1; x(); }", "not a function");
+        rejects("dhanda run() { thoos x: int = 1; x(); }", "not a function");
     }
 
     #[test]
     fn any_statement_is_allowed_at_the_top_level() {
-        accepts("dhanda muji() { } bol(1);");
-        accepts("dhanda muji() { } 1 + 1;");
-        accepts("dhanda muji() { } yedi (1) { 1; }");
-        accepts("dhanda muji() { } jabasamma (1) { 1; }");
-        accepts("dhanda muji() { } fanfani (thoos i = 0; 1; i) { 1; }");
+        accepts("bol(1);");
+        accepts("1 + 1;");
+        accepts("yedi (1) { 1; }");
+        accepts("jabasamma (1) { 1; }");
+        accepts("fanfani (thoos i: int = 0; 1; i) { 1; }");
     }
 
     #[test]
     fn a_variable_used_before_the_line_that_declares_it() {
-        rejects("dhanda muji() { later; thoos later = 1; }", "later");
+        rejects("dhanda run() { later; thoos later: int = 1; }", "later");
     }
 
     #[test]
     fn a_return_outside_any_function() {
-        rejects("dhanda muji() { } de 1;", "inside a `dhanda`");
+        rejects("de 1;", "inside a `dhanda`");
     }
 
     #[test]
     fn a_for_loop_variable_does_not_outlive_the_loop() {
         rejects(
-            "dhanda muji() { fanfani (thoos i = 0; 1; i) { 1; } i; }",
+            "dhanda run() { fanfani (thoos i: int = 0; 1; i) { 1; } i; }",
             "i",
+        );
+    }
+
+    #[test]
+    fn a_void_call_passed_as_an_int_argument() {
+        rejects("dhanda nothing() { } bol(nothing());", "got void");
+        rejects(
+            "dhanda prints_only(a: int) { bol(a); } bol(prints_only(3));",
+            "got void",
+        );
+    }
+
+    #[test]
+    fn a_void_call_assigned_to_an_int_variable() {
+        rejects(
+            "dhanda nothing() { } thoos t: int = nothing();",
+            "Cannot assign",
+        );
+    }
+
+    #[test]
+    fn a_non_void_function_with_no_return_at_all() {
+        rejects(
+            "dhanda nothing() int { }",
+            "does not return a value in all control paths",
+        );
+    }
+
+    #[test]
+    fn a_non_void_function_that_returns_only_inside_a_conditional() {
+        rejects(
+            "dhanda only_positive(n: int) int { yedi (n > 0) { de n; } }",
+            "does not return a value in all control paths",
+        );
+    }
+
+    #[test]
+    fn a_non_void_function_that_returns_only_inside_a_loop() {
+        rejects(
+            "dhanda first_match(limit: int) int { \
+             fanfani (thoos i: int = 0; i < 10; i = i + 1) { yedi (i == limit) { de i; } } }",
+            "does not return a value in all control paths",
+        );
+        rejects(
+            "dhanda first_over(limit: int) int { \
+             thoos i: int = 0; jabasamma (i < 100) { yedi (i > limit) { de i; } i = i + 1; } }",
+            "does not return a value in all control paths",
         );
     }
 
@@ -920,7 +1203,7 @@ mod tests {
 
     #[test]
     fn reports_every_broken_statement_in_one_pass() {
-        let diagnostics = analyse("dhanda muji() { } dhanda a() { de x; } dhanda b() { de y; }")
+        let diagnostics = analyse("dhanda a() int { de x; } dhanda b() int { de y; }")
             .expect_err("should be rejected");
 
         assert_eq!(diagnostics.len(), 2);
@@ -931,11 +1214,11 @@ mod tests {
     // A `fanfani` pushes the scope for its parentheses before analysing its
     // initialiser, so a failing initialiser leaves that scope behind. If it is
     // not cleaned up, every later statement is analysed one scope too deep, so
-    // the `muji` defined after it lands outside the global scope and is not found.
+    // the `run` defined after it lands outside the global scope and is not found.
     #[test]
     fn a_failed_for_loop_does_not_leave_its_scope_behind() {
         let diagnostics = analyse(
-            "dhanda broken() { fanfani (thoos i = missing; 1; i) { 1; } } dhanda muji() { }",
+            "dhanda broken() { fanfani (thoos i: int = missing; 1; i) { 1; } } dhanda run() { }",
         )
         .expect_err("should be rejected");
 

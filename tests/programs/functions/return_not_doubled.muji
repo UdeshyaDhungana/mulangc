@@ -2,7 +2,7 @@
 // appended after them is unreachable, and must not corrupt the reachable
 // paths or leave a stray frame release behind.
 
-dhanda both_arms(n) {
+dhanda both_arms(n: int) int {
     yedi (n > 0) {
         de 1;
     } natra {
@@ -10,20 +10,16 @@ dhanda both_arms(n) {
     }
 }
 
-dhanda ends_with_de(n) {
+dhanda ends_with_de(n: int) int {
     bol(n);
     de n * 2;
 }
 
-dhanda returns_immediately() {
+dhanda returns_immediately() int {
     de 42;
 }
 
-dhanda muji() {
-    bol(both_arms(1));
-    bol(both_arms(-1));
-    bol(ends_with_de(5));
-    bol(returns_immediately());
-}
-
-muji();
+bol(both_arms(1));
+bol(both_arms(-1));
+bol(ends_with_de(5));
+bol(returns_immediately());

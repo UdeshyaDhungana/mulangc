@@ -13,8 +13,8 @@ use crate::{
         Block, Conditional, Else, Expression, ExpressionKind, Statement, StatementKind,
         UnaryOperator,
         sema::{
-            __DEBUG_BOL_FUNCTION_NODE_ID, Analysis, Counter, FunctionAttributes,
-            IdentifierAttributes, MAIN_FUNCTION_NODE_ID, MemoryUnits,
+            __DEBUG_BOL_BOOL_FUNCTION_NODE_ID, __DEBUG_BOL_FUNCTION_NODE_ID, Analysis, Counter,
+            FunctionAttributes, IdentifierAttributes, MAIN_FUNCTION_NODE_ID, MemoryUnits,
         },
     },
 };
@@ -28,9 +28,7 @@ const RESERVED_SLOTS_BEFORE_LOCALS: MemoryUnits = 1;
 pub struct Lowerer {
     analysis: Analysis,
     registered_functions: HashMap<String, IRFunction>,
-
     current_function_stack: Vec<IRFunction>,
-
     counter: Counter,
 }
 
@@ -63,8 +61,13 @@ impl Lowerer {
         current_function.push_instruction(instruction);
     }
 
-    fn push_fn_to_frame_stack(&mut self, node_id: &str, frame_size: MemoryUnits, argc: usize) {
-        let new_fn = IRFunction::new(node_id, frame_size, argc);
+    fn push_fn_to_frame_stack(
+        &mut self,
+        node_id: &str,
+        frame_size: MemoryUnits,
+        argc_sizes: Vec<MemoryUnits>,
+    ) {
+        let new_fn = IRFunction::new(node_id, frame_size, argc_sizes);
         self.current_function_stack.push(new_fn);
     }
 
@@ -85,7 +88,14 @@ impl Lowerer {
         self.push_fn_to_frame_stack(
             __DEBUG_BOL_FUNCTION_NODE_ID,
             self.frame_size_for_function(__DEBUG_BOL_FUNCTION_NODE_ID),
-            1,
+            vec![1],
+        );
+        self.pop_fn_from_frame_stack();
+
+        self.push_fn_to_frame_stack(
+            __DEBUG_BOL_BOOL_FUNCTION_NODE_ID,
+            self.frame_size_for_function(__DEBUG_BOL_BOOL_FUNCTION_NODE_ID),
+            vec![1],
         );
         self.pop_fn_from_frame_stack();
     }
@@ -96,7 +106,7 @@ impl Lowerer {
         self.push_fn_to_frame_stack(
             MAIN_FUNCTION_NODE_ID,
             self.frame_size_for_function(MAIN_FUNCTION_NODE_ID),
-            0,
+            vec![0],
         );
         self.lower_block(ast.block);
 
@@ -119,7 +129,9 @@ impl Lowerer {
 
     fn lower_statement(&mut self, statement: Statement) {
         match statement.kind {
-            StatementKind::Declaration { identifier, value } => {
+            StatementKind::Declaration {
+                identifier, value, ..
+            } => {
                 let expr_reg = self.lower_expression(value);
 
                 let frame_address_reg = self.get_next_register();
@@ -148,7 +160,11 @@ impl Lowerer {
                 self.push_fn_to_frame_stack(
                     &function_definition.identifier.node_id,
                     self.frame_size_for_function(&function_definition.identifier.node_id),
-                    function_definition.parameters.len(),
+                    function_definition
+                        .parameters
+                        .iter()
+                        .map(|p| p.var_type.size())
+                        .collect(),
                 );
                 let frame_address_reg = self.get_next_register();
                 self.append_instruction(LoadFrameAddress(LoadFrameAddressSpec {
@@ -163,7 +179,7 @@ impl Lowerer {
                 for (idx, parameter) in function_definition.parameters.iter().enumerate() {
                     let offset = self
                         .analysis
-                        .must_get_variable_attributes_from_node_id(&parameter.node_id)
+                        .must_get_variable_attributes_from_node_id(&parameter.identifier.node_id)
                         .offset_from_frame_base;
                     self.append_instruction(StoreFromRegister(StoreFromRegisterSpec {
                         src_reg: idx + 1,
@@ -267,8 +283,9 @@ impl Lowerer {
                 }));
                 dst_reg
             }
+            // Integer lives in one register
             ExpressionKind::Integer(value) => {
-                let reg_num = self.get_next_register();
+                let reg_num: RegisterNumber = self.get_next_register();
                 self.append_instruction(Instruction::LoadImmediate(LoadImmediateSpec {
                     dst_reg: reg_num,
                     immediate: value,
@@ -276,8 +293,8 @@ impl Lowerer {
                 reg_num
             }
             ExpressionKind::UnaryOperation { operator, operand } => {
-                let operand_reg = self.lower_expression(*operand);
-                let dst_reg = self.get_next_register();
+                let operand_reg: RegisterNumber = self.lower_expression(*operand);
+                let dst_reg: RegisterNumber = self.get_next_register();
                 self.append_instruction(Instruction::UnaryOp(UnaryOpSpec {
                     dst_reg,
                     operation: operator.into(),
@@ -290,8 +307,8 @@ impl Lowerer {
                 left,
                 right,
             } => {
-                let left_reg = self.lower_expression(*left);
-                let dst_reg = self.get_next_register();
+                let left_reg: RegisterNumber = self.lower_expression(*left);
+                let dst_reg: RegisterNumber = self.get_next_register();
 
                 // For boolean operations, we evaluate things differently
                 let Ok(operation) = BinaryOperation::try_from(operator) else {
@@ -334,7 +351,7 @@ impl Lowerer {
                     return dst_reg;
                 };
 
-                let right_reg = self.lower_expression(*right);
+                let right_reg: RegisterNumber = self.lower_expression(*right);
 
                 self.append_instruction(BinaryOp(BinaryOpSpec {
                     dst_reg,
@@ -345,7 +362,7 @@ impl Lowerer {
                 dst_reg
             }
             ExpressionKind::Assignment { target, value } => {
-                let expression_reg = self.lower_expression(*value);
+                let expression_reg: RegisterNumber = self.lower_expression(*value);
                 let AssignmentTarget::Variable(identifier) = target;
                 let resolved_node_id = self.analysis.resolve(&identifier.node_id);
                 let (frame_pointer_reg, offset) = self
@@ -358,7 +375,7 @@ impl Lowerer {
                 expression_reg
             }
             ExpressionKind::Call { callee, arguments } => {
-                let frame_reg = self.get_next_register();
+                let frame_reg: RegisterNumber = self.get_next_register();
                 self.append_instruction(Instruction::LoadFrameAddress(LoadFrameAddressSpec {
                     dst_reg: frame_reg,
                 }));
@@ -456,11 +473,11 @@ impl Lowerer {
     // How many memory units does a function take
     fn frame_size_for_function(&self, node_id: &str) -> MemoryUnits {
         if let Some(IdentifierAttributes::Function(FunctionAttributes {
-            variable_slot_count,
+            memory_units_consumed,
             ..
         })) = self.analysis.node_id_attributes.get(node_id)
         {
-            return *variable_slot_count + RESERVED_SLOTS_BEFORE_LOCALS;
+            return *memory_units_consumed + RESERVED_SLOTS_BEFORE_LOCALS;
         };
 
         panic!("LOWERING:: No function location recorded for {node_id}");

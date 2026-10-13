@@ -111,6 +111,8 @@ impl Parser<'_> {
     fn parse_declaration(&mut self) -> Result<Statement, Diagnostic> {
         let start = self.expect(Token::Declare)?;
         let name = self.expect_identifier()?;
+        self.expect(Token::TypeSpecifier)?;
+        let var_type = self.expect_variable_type()?;
         self.expect(Token::Assign)?;
         let value = self.parse_expression(Precedence::Lowest)?;
         let end = self.expect_statement_terminator()?;
@@ -119,6 +121,7 @@ impl Parser<'_> {
             kind: StatementKind::Declaration {
                 identifier: name,
                 value,
+                var_type,
             },
             span: start.joined_with(end),
         })
@@ -370,8 +373,20 @@ impl Parser<'_> {
     fn parse_call(&mut self, callee: Expression) -> Result<Expression, Diagnostic> {
         let callee = self.callee_of(callee)?;
         self.expect(Token::LeftParenthesis)?;
-        let arguments =
-            self.parse_comma_separated(&Token::RightParenthesis, Self::parse_expression_at_lowest)?;
+
+        let mut arguments: Vec<Expression> = Vec::new();
+
+        loop {
+            if self.is_at(&Token::RightParenthesis) {
+                break;
+            }
+            let arg = self.parse_expression_at_lowest()?;
+            arguments.push(arg);
+            if self.is_at(&Token::Comma) {
+                self.advance();
+            }
+        }
+
         let end = self.expect(Token::RightParenthesis)?;
 
         Ok(Expression {
@@ -384,9 +399,21 @@ impl Parser<'_> {
         let start = self.expect(Token::Function)?;
         let name = self.expect_identifier()?;
         self.expect(Token::LeftParenthesis)?;
-        let parameters =
-            self.parse_comma_separated(&Token::RightParenthesis, Self::expect_identifier)?;
+        let parameters = self.parse_function_parameters()?;
         self.expect(Token::RightParenthesis)?;
+
+        let return_type: VariableType;
+
+        if let Token::VariableType(t) = self.current_token().clone() {
+            let span = self.current_span();
+            self.advance();
+            return_type = VariableType::from_variable_type_token(t, span)
+        } else {
+            return_type = VariableType {
+                span: name.span,
+                classification: VariableClassification::VoidType,
+            }
+        }
         let body = self.parse_block()?;
 
         Ok(Statement {
@@ -394,6 +421,7 @@ impl Parser<'_> {
             kind: StatementKind::Function(FunctionDefinition {
                 identifier: name,
                 parameters,
+                return_type,
                 body,
             }),
         })
@@ -403,21 +431,26 @@ impl Parser<'_> {
         self.parse_expression(Precedence::Lowest)
     }
 
-    fn parse_comma_separated<T>(
-        &mut self,
-        closing: &Token,
-        parse_item: impl Fn(&mut Self) -> Result<T, Diagnostic>,
-    ) -> Result<Vec<T>, Diagnostic> {
-        let mut items = Vec::new();
-        if self.is_at(closing) {
-            return Ok(items);
+    fn parse_function_parameters(&mut self) -> Result<Vec<FunctionParameter>, Diagnostic> {
+        let mut items: Vec<FunctionParameter> = Vec::new();
+        loop {
+            if self.is_at(&Token::RightParenthesis) {
+                break;
+            }
+            let identifier = self.expect_identifier()?;
+            self.expect(Token::TypeSpecifier)?;
+            let var_type = self.expect_variable_type()?;
+            let span = identifier.span.joined_with(var_type.span);
+            items.push(FunctionParameter {
+                identifier,
+                var_type,
+                span,
+            });
+            if self.is_at(&Token::Comma) {
+                self.advance();
+            }
         }
 
-        items.push(parse_item(self)?);
-        while self.is_at(&Token::Comma) {
-            self.advance();
-            items.push(parse_item(self)?);
-        }
         Ok(items)
     }
 
@@ -465,6 +498,15 @@ impl Parser<'_> {
             span,
             node_id: self.get_node_id(name),
         })
+    }
+
+    fn expect_variable_type(&mut self) -> Result<VariableType, Diagnostic> {
+        let Token::VariableType(t) = self.current_token().clone() else {
+            return Err(self.error_at_current("expected a type"));
+        };
+        let span = self.current_span();
+        self.advance();
+        Ok(VariableType::from_variable_type_token(t, span))
     }
 
     fn expect_statement_terminator(&mut self) -> Result<Span, Diagnostic> {

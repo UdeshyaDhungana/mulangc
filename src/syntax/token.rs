@@ -2,6 +2,14 @@ use std::fmt;
 
 use crate::diagnostics::Span;
 
+#[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::enum_variant_names)]
+pub enum VariableTypeToken {
+    IntType,
+    BooleanType,
+    // CustomType(Identifier),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Token {
     Identifier(String),
@@ -39,6 +47,9 @@ pub enum Token {
     LeftBrace,
     RightBrace,
 
+    TypeSpecifier,
+    VariableType(VariableTypeToken),
+
     EndOfInput,
 }
 
@@ -59,6 +70,11 @@ pub fn keyword_or_identifier(word: &str) -> Token {
         "fanfani" => Token::For,
         "ra" => Token::BooleanAnd,
         "wa" => Token::BooleanOr,
+        // List all builtin types here and compare them on Token::from_type_str
+        // WARN: If you add a new builtin, add the corresponding branch to from_type_str as well
+        "int" => Token::from_type_str("int"),
+        "bool" => Token::from_type_str("bool"),
+        "void" => Token::from_type_str("void"),
         _ => Token::Identifier(word.to_owned()),
     }
 }
@@ -70,6 +86,14 @@ impl Token {
             Token::Integer(_) => "an integer".to_owned(),
             Token::EndOfInput => "end of input".to_owned(),
             spelled => format!("`{spelled}`"),
+        }
+    }
+
+    pub fn from_type_str(type_str: &str) -> Self {
+        match type_str {
+            "int" => Token::VariableType(VariableTypeToken::IntType),
+            "bool" => Token::VariableType(VariableTypeToken::BooleanType),
+            _ => todo!("TOKEN:: custom types not supported yet"),
         }
     }
 
@@ -119,6 +143,12 @@ impl fmt::Display for Token {
             Token::RightParenthesis => ")",
             Token::LeftBrace => "{",
             Token::RightBrace => "}",
+
+            Token::TypeSpecifier => ":",
+            Token::VariableType(variable_type) => match variable_type {
+                VariableTypeToken::IntType => "int",
+                VariableTypeToken::BooleanType => "bool",
+            },
 
             Token::EndOfInput => "",
         };

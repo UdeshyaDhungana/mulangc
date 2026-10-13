@@ -1,25 +1,21 @@
 // Recursion: a single self-call, and a doubly-recursive one.
 
-dhanda fac(n) {
+dhanda fac(n: int) int {
     yedi (n == 0) {
         de 1;
     }
     de n * fac(n - 1);
 }
 
-dhanda fib(n) {
+dhanda fib(n: int) int {
     yedi (n < 2) {
         de n;
     }
     de fib(n - 1) + fib(n - 2);
 }
 
-dhanda muji() {
-    bol(fac(0));
-    bol(fac(5));
-    bol(fib(0));
-    bol(fib(1));
-    bol(fib(10));
-}
-
-muji();
+bol(fac(0));
+bol(fac(5));
+bol(fib(0));
+bol(fib(1));
+bol(fib(10));

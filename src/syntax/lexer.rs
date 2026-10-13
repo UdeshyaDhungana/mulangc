@@ -47,6 +47,7 @@ impl<'source> Lexer<'source> {
                 ')' => self.push(Token::RightParenthesis, start),
                 '{' => self.push(Token::LeftBrace, start),
                 '}' => self.push(Token::RightBrace, start),
+                ':' => self.push(Token::TypeSpecifier, start),
 
                 '=' => {
                     self.push_one_or_two_character_token(Token::Assign, '=', Token::Equal, start)
@@ -175,6 +176,7 @@ fn is_name_continuation(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::syntax::token::VariableTypeToken;
 
     fn tokens_of(source: &str) -> Vec<Token> {
         tokenize(source)
@@ -187,10 +189,12 @@ mod tests {
     #[test]
     fn scans_a_declaration() {
         assert_eq!(
-            tokens_of("thoos x = 43;"),
+            tokens_of("thoos x: int = 43;"),
             vec![
                 Token::Declare,
                 Token::Identifier("x".to_owned()),
+                Token::TypeSpecifier,
+                Token::VariableType(VariableTypeToken::IntType),
                 Token::Assign,
                 Token::Integer(43),
                 Token::Semicolon,

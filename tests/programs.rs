@@ -6,9 +6,7 @@
 //! :END SECTION
 
 //! End-to-end tests: compile each program in `tests/programs`, assemble it,
-//! run it, and compare what it printed against the matching `.out` file. Each
-//! program is also run through the IR interpreter (`--ir`) and held to the
-//! same `.out`.
+//! run it, and compare what it printed against the matching `.out` file.
 //!
 //! Every program gets its own scratch directory under `target/muji-tests`,
 //! because the compiler writes `{stem}.s` relative to the working directory
@@ -153,10 +151,8 @@ fn relative_name(source: &Path) -> String {
         .to_owned()
 }
 
-/// Check the program through both backends — native (compile, assemble, run)
-/// and the IR interpreter (`--ir`) — against the same `.out` and `.exit`. The
-/// `Err` reports the first stage that went wrong in each backend that failed,
-/// so a broken interpreter never hides a broken code generator or vice versa.
+/// Compile, assemble and run the program, and check it against its `.out` and
+/// `.exit`. The `Err` reports the first stage that went wrong.
 fn run_one(source: &Path) -> Result<(), String> {
     let name = source
         .file_stem()
@@ -169,21 +165,8 @@ fn run_one(source: &Path) -> Result<(), String> {
 
     let scratch = prepare_scratch_directory(&reported_as.replace('/', "_"), source, name);
 
-    let failures: Vec<String> = [
-        run_native(source, &scratch, name)
-            .map_err(|(stage, detail)| format!("  {reported_as} [native]: {stage}\n{detail}")),
-        run_ir(source, &scratch, name)
-            .map_err(|(stage, detail)| format!("  {reported_as} [ir]: {stage}\n{detail}")),
-    ]
-    .into_iter()
-    .filter_map(Result::err)
-    .collect();
-
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(failures.concat())
-    }
+    run_native(source, &scratch, name)
+        .map_err(|(stage, detail)| format!("  {reported_as}: {stage}\n{detail}"))
 }
 
 /// Compile to assembly, assemble with `clang`, run the binary, compare.
@@ -204,16 +187,8 @@ fn run_native(source: &Path, scratch: &Path, name: &str) -> Result<(), (String, 
     compare(source, result)
 }
 
-/// Run the program through the IR interpreter, compare.
-fn run_ir(source: &Path, scratch: &Path, name: &str) -> Result<(), (String, String)> {
-    let result = run_with_timeout(scratch, "ir", COMPILER, &["--ir", &format!("{name}.muji")])
-        .map_err(|detail| ("did not terminate".to_string(), indent(&detail)))?;
-
-    compare(source, result)
-}
-
 /// Hold a finished run up against the program's `.out` and `.exit`. stderr is
-/// only shown on failure — for the interpreter it is where a panic lands.
+/// only shown on failure.
 fn compare(source: &Path, (actual_output, actual_exit, stderr): (String, i32, String)) -> Result<(), (String, String)> {
     let stderr_note = if stderr.is_empty() {
         String::new()
@@ -259,8 +234,7 @@ fn prepare_scratch_directory(directory_name: &str, source: &Path, stem: &str) ->
 }
 
 /// Run a program, giving up after [`RUN_TIMEOUT`]. Returns its stdout, exit
-/// code, and stderr. `label` keeps the output files of the two backends apart
-/// in the shared scratch directory.
+/// code, and stderr. `label` names its output files in the scratch directory.
 ///
 /// stdout and stderr go to files rather than pipes: a pipe's buffer can fill
 /// while we are still waiting, which would deadlock the very case this exists

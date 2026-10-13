@@ -1,6 +1,9 @@
-use std::fmt;
+use std::fmt::{self, Display};
 
-use crate::diagnostics::Span;
+use crate::{
+    diagnostics::Span,
+    syntax::{sema::MemoryUnits, token::VariableTypeToken},
+};
 
 #[derive(Clone, Debug)]
 pub struct AST {
@@ -14,6 +17,79 @@ pub struct Identifier {
     pub span: Span,
 }
 
+// Actual type of the variable
+#[derive(Clone, Debug, PartialEq)]
+pub enum VariableClassification {
+    IntegerType,
+    BooleanType,
+    VoidType,
+}
+
+impl VariableClassification {
+    fn size(&self) -> MemoryUnits {
+        match self {
+            VariableClassification::IntegerType | VariableClassification::BooleanType => 1,
+            VariableClassification::VoidType => 0,
+        }
+    }
+
+    pub fn is_convertible_to(&self, target: &VariableClassification) -> bool {
+        match self {
+            Self::IntegerType => match target {
+                Self::BooleanType => true,
+                Self::IntegerType => true,
+                Self::VoidType => false,
+            },
+            Self::BooleanType => match target {
+                Self::BooleanType => true,
+                Self::IntegerType => true,
+                Self::VoidType => false,
+            },
+            Self::VoidType => false,
+        }
+    }
+}
+
+impl Display for VariableClassification {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let to_write = match self {
+            Self::IntegerType => "int",
+            Self::BooleanType => "bool",
+            Self::VoidType => "void",
+        };
+        f.write_str(to_write)
+    }
+}
+
+// A node in the AST recording the classification and a span
+#[derive(Debug, Clone)]
+pub struct VariableType {
+    pub span: Span,
+    pub classification: VariableClassification,
+}
+
+impl Display for VariableType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.classification.to_string())
+    }
+}
+
+impl VariableType {
+    pub fn from_variable_type_token(type_token: VariableTypeToken, span: Span) -> Self {
+        Self {
+            span,
+            classification: match type_token {
+                VariableTypeToken::IntType => VariableClassification::IntegerType,
+                VariableTypeToken::BooleanType => VariableClassification::BooleanType,
+            },
+        }
+    }
+
+    pub fn size(&self) -> MemoryUnits {
+        self.classification.size()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Statement {
     pub kind: StatementKind,
@@ -24,6 +100,7 @@ pub struct Statement {
 pub enum StatementKind {
     Declaration {
         identifier: Identifier,
+        var_type: VariableType,
         value: Expression,
     },
     Return(Expression),
@@ -82,10 +159,27 @@ pub enum ExpressionKind {
     },
 }
 
+// This means that functions can only accept variable parameters
+#[derive(Debug, Clone)]
+pub struct FunctionParameter {
+    pub identifier: Identifier,
+    pub var_type: VariableType,
+    pub span: Span,
+}
+
+impl Display for FunctionParameter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let identifier = self.identifier.clone();
+        let var_type = self.var_type.clone();
+        write!(f, "{identifier}: {var_type}")
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct FunctionDefinition {
     pub identifier: Identifier,
-    pub parameters: Vec<Identifier>,
+    pub parameters: Vec<FunctionParameter>,
+    pub return_type: VariableType,
     pub body: Block,
 }
 
@@ -212,8 +306,9 @@ fn write_statement(
         StatementKind::Declaration {
             identifier: name,
             value,
+            var_type,
         } => {
-            write!(formatter, "thoos {name} = ")?;
+            write!(formatter, "thoos {name}: {var_type} = ")?;
             write_expression(formatter, value, depth)?;
             formatter.write_str(";")
         }
