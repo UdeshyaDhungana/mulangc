@@ -1,23 +1,19 @@
 // Calls: arguments, return values used in expressions, nested calls,
 // and a function with no parameters.
 
-dhanda add(a, b) {
+dhanda add(a: int, b: int) int {
     de a + b;
 }
 
-dhanda one() {
+dhanda one() int {
     de 1;
 }
 
-dhanda muji() {
-    bol(add(2, 3));
-    bol(add(add(1, 2), 4));
-    bol(one());
-    bol(add(one(), one()));
+bol(add(2, 3));
+bol(add(add(1, 2), 4));
+bol(one());
+bol(add(one(), one()));
 
-    thoos t = add(10, 20);
-    bol(t);
-    bol(t * 2);
-}
-
-muji();
+thoos t: int = add(10, 20);
+bol(t);
+bol(t * 2);

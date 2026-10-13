@@ -2,7 +2,7 @@
 // has to go through the static link into `_main`'s frame, so the change is
 // visible to every later read.
 
-thoos counter = 0;
+thoos counter: int = 0;
 
 dhanda bump() {
     counter = counter + 5;
@@ -13,12 +13,9 @@ dhanda twice() {
     bump();
 }
 
-dhanda muji() {
-    twice();
-    bol(counter);
-    twice();
-    bol(counter);
-}
+twice();
+bol(counter);
+twice();
+bol(counter);
 
-muji();
 bol(counter);

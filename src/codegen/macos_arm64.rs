@@ -4,7 +4,7 @@ use crate::{
         IRProgram, Instruction, LoadFrameAddressSpec, LoadImmediateSpec, LoadToRegisterSpec,
         MoveSpec, ReturnSpec, StoreFromRegisterSpec, UnaryOpSpec, UnaryOperation,
     },
-    syntax::sema::{__DEBUG_BOL_FUNCTION_NODE_ID, MemoryUnits},
+    syntax::sema::{__DEBUG_BOL_BOOL_FUNCTION_NODE_ID, __DEBUG_BOL_FUNCTION_NODE_ID, MemoryUnits},
     to_i64,
 };
 
@@ -125,19 +125,19 @@ impl CodeGenerator {
     }
 
     #[allow(non_snake_case)]
-    fn emit___debug_bol(&mut self) {
+    fn emit___debug(&mut self, node_id: &str) {
         self.emit_outer_level_line("// BUILTIN DEBUGGER");
 
         self.emit_outer_level_line(".p2align 2");
-        self.emit_outer_level_line(&format!("{__DEBUG_BOL_FUNCTION_NODE_ID}:"));
+        self.emit_outer_level_line(&format!("{node_id}:"));
 
         // Could use a frame here, but not necessary for a builtin
         self.emit_assembly_for_reserving_frame(1);
 
         // because printf expects arguments on the stack
         self.emit_line("str x0, [sp]");
-        self.emit_line("adrp x0, Lfmt_integer@PAGE");
-        self.emit_line("add x0, x0, Lfmt_integer@PAGEOFF");
+        self.emit_line(&format!("adrp x0, Lfmt_integer_{node_id}@PAGE"));
+        self.emit_line(&format!("add x0, x0, Lfmt_integer_{node_id}@PAGEOFF"));
         self.emit_line("bl _printf");
 
         self.emit_frame_release_assembly();
@@ -146,7 +146,7 @@ impl CodeGenerator {
         self.emit_newline();
 
         self.emit_outer_level_line(".section __TEXT,__cstring,cstring_literals");
-        self.emit_outer_level_line("Lfmt_integer:");
+        self.emit_outer_level_line(&format!("Lfmt_integer_{node_id}:"));
         self.emit_line(".asciz \"%ld\\n\"");
         self.emit_newline();
 
@@ -158,8 +158,10 @@ impl CodeGenerator {
         self.emit_preamble();
 
         for (fn_node_id, fn_instructions) in ir_program {
-            if fn_node_id == __DEBUG_BOL_FUNCTION_NODE_ID {
-                self.emit___debug_bol();
+            if fn_node_id == __DEBUG_BOL_FUNCTION_NODE_ID
+                || fn_node_id == __DEBUG_BOL_BOOL_FUNCTION_NODE_ID
+            {
+                self.emit___debug(&fn_node_id);
                 continue;
             }
             self.generate_fn(fn_node_id, fn_instructions);
@@ -172,7 +174,7 @@ impl CodeGenerator {
     fn generate_fn(&mut self, fn_node_id: String, ir_fn: IRFunction) {
         self.begin_new_text_section();
         let max_register_no = ir_fn.max_register_no();
-        let argc = ir_fn.argc();
+        let argc = ir_fn.argc_sizes().iter().sum::<MemoryUnits>();
         let frame_size = ir_fn.frame_size();
         self.emit_outer_level_line(&format!(
             "// {fn_node_id}: max_register_no={max_register_no}, args={argc}, frame_size={frame_size}",

@@ -6,7 +6,6 @@ use std::thread;
 use mulang::codegen::macos_arm64::{CodeGenerator, REQUIRED_STACK_BYTES};
 use mulang::diagnostics::render_all;
 use mulang::ir::instructions::format_program;
-use mulang::ir::interpreter::IRInterpreter;
 use mulang::ir::lowering::Lowerer;
 use mulang::syntax;
 use mulang::syntax::sema::Sema;
@@ -14,8 +13,6 @@ use mulang::syntax::sema::Sema;
 enum Mode {
     // AST -> assembly
     Assemble,
-    // AST -> IR -> interpreter
-    InterpretIR,
     // AST -> IR -> .irmu text file
     EmitIRText,
 }
@@ -25,17 +22,9 @@ fn main() -> ExitCode {
 
     let work = move || match arguments.as_slice() {
         [path] => compile_file(path, Mode::Assemble),
-        [flag, path] if flag == "--ir" => compile_file(path, Mode::InterpretIR),
-        [first, second, path]
-            if matches!(
-                (first.as_str(), second.as_str()),
-                ("--ir", "--text") | ("--text", "--ir")
-            ) =>
-        {
-            compile_file(path, Mode::EmitIRText)
-        }
+        [flag, path] if flag == "--irtext" => compile_file(path, Mode::EmitIRText),
         _ => {
-            eprintln!("usage: mulang [--ir [--text]] program.muji");
+            eprintln!("usage: mulang [--irtext] program.muji");
             ExitCode::FAILURE
         }
     };
@@ -94,20 +83,15 @@ fn compile_file(path: &str, mode: Mode) -> ExitCode {
             eprint!("{}", render_all(&diagnostics, &source, path));
             ExitCode::FAILURE
         }
-        Ok(analysis) if matches!(mode, Mode::InterpretIR | Mode::EmitIRText) => {
+        Ok(analysis) if matches!(mode, Mode::EmitIRText) => {
             let lowerer = Lowerer::new(analysis);
             let ir_program = lowerer.lower(ast);
 
-            if let Mode::EmitIRText = mode {
-                let output_path = format!("{file_name_without_extension}.irmu");
-                if let Err(error) = std::fs::write(&output_path, format_program(&ir_program)) {
-                    eprintln!("mulang: cannot write {output_path}: {error}");
-                    return ExitCode::FAILURE;
-                }
-                return ExitCode::SUCCESS;
+            let output_path = format!("{file_name_without_extension}.irmu");
+            if let Err(error) = std::fs::write(&output_path, format_program(&ir_program)) {
+                eprintln!("mulang: cannot write {output_path}: {error}");
+                return ExitCode::FAILURE;
             }
-
-            IRInterpreter::new(ir_program).run();
             ExitCode::SUCCESS
         }
         Ok(analysis) => {

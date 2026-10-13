@@ -36,7 +36,7 @@ mod tests {
 
     #[test]
     fn parses_a_declaration() {
-        assert_eq!(reprint("thoos x = 43;"), "thoos x = 43;");
+        assert_eq!(reprint("thoos x: int = 43;"), "thoos x: int = 43;");
     }
 
     #[test]
@@ -85,7 +85,7 @@ mod tests {
     fn rejects_array_and_hash_map_syntax() {
         assert_eq!(first_error("[1, 2];"), "unrecognised character `[`");
         assert_eq!(first_error("a[0];"), "unrecognised character `[`");
-        assert_eq!(first_error("{a: 1};"), "unrecognised character `:`");
+        assert_eq!(first_error("{a: 1};"), "expected an expression, found `{`");
     }
 
     #[test]
@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn parses_a_function_with_no_parameters() {
         assert_eq!(
-            reprint("dhanda one() { de 1; }"),
+            reprint("dhanda one() int { de 1; }"),
             "dhanda one() {\n    de 1;\n}"
         );
     }
@@ -134,8 +134,8 @@ mod tests {
     #[test]
     fn parses_a_function_with_parameters() {
         assert_eq!(
-            reprint("dhanda add(a, b) { de a + b; }"),
-            "dhanda add(a, b) {\n    de (a + b);\n}"
+            reprint("dhanda add(a: int, b: int) int { de a + b; }"),
+            "dhanda add(a: int, b: int) {\n    de (a + b);\n}"
         );
     }
 
@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn a_function_is_no_longer_an_expression() {
         assert_eq!(
-            first_error("thoos f = dhanda(x) { de x; };"),
+            first_error("thoos f: int = dhanda(x) { de x; };"),
             "expected an expression, found `dhanda`"
         );
     }
@@ -158,8 +158,8 @@ mod tests {
     #[test]
     fn parses_both_for_loop_initialiser_forms() {
         assert_eq!(
-            reprint("fanfani (thoos i = 0; i < 3; i = i + 1) { i; }"),
-            "fanfani (thoos i = 0; (i < 3); (i = (i + 1))) {\n    i;\n}"
+            reprint("fanfani (thoos i: int = 0; i < 3; i = i + 1) { i; }"),
+            "fanfani (thoos i: int = 0; (i < 3); (i = (i + 1))) {\n    i;\n}"
         );
         assert_eq!(
             reprint("fanfani (i = 0; i < 3; i = i + 1) { i; }"),
@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn rejects_a_loop_where_an_expression_is_expected() {
         assert_eq!(
-            first_error("thoos x = jabasamma (a) {};"),
+            first_error("thoos x: int = jabasamma (a) {};"),
             "expected an expression, found `jabasamma`"
         );
         assert_eq!(
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn requires_a_semicolon_after_a_declaration() {
-        assert!(first_error("thoos x = 1").starts_with("expected `;`"));
+        assert!(first_error("thoos x: int = 1").starts_with("expected `;`"));
     }
 
     #[test]

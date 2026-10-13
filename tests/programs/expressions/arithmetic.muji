@@ -1,13 +1,9 @@
 // Binary arithmetic, precedence, grouping, and unary minus.
 
-dhanda muji() {
-    bol(2 + 3 * 4);
-    bol((2 + 3) * 4);
-    bol(10 - 3 - 2);
-    bol(17 / 5);
-    bol(17 % 5);
-    bol(-7 + 2);
-    bol(-(3 * 4));
-}
-
-muji();
+bol(2 + 3 * 4);
+bol((2 + 3) * 4);
+bol(10 - 3 - 2);
+bol(17 / 5);
+bol(17 % 5);
+bol(-7 + 2);
+bol(-(3 * 4));

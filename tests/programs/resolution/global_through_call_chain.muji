@@ -2,18 +2,14 @@
 // of calls. `a` finds `x` by following its static link to `_main`'s frame,
 // where slot 0 is the static link slot and `x` sits after it.
 
-thoos x = 3;
+thoos x: int = 3;
 
-dhanda a() {
+dhanda a() int {
     de x;
 }
 
-dhanda b() {
+dhanda b() int {
     de a();
 }
 
-dhanda muji() {
-    bol(b());
-}
-
-muji();
+bol(b());

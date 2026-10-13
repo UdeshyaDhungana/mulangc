@@ -59,7 +59,7 @@ fn <node_id>, frame_size=k, n
 - Falling off the end of a function lowers to `ldi rx, 0` then `ret rx`.
 - A `call`'s result goes to the next available register. If unused, that register is simply never read.
 - `&&` and `||` lower to branches. They are not ops.
-- `bol` is a builtin: it lowers to an ordinary `call _debug_bol, rlink, ra`. It has no IR body; the interpreter prints `ra` natively and writes `0` to the result register.
+- `bol` is a builtin: it lowers to an ordinary `call _debug_bol, rlink, ra`. It has no IR body; the backend provides it.
 - Static link argument depends on where the callee is defined:
   - callee nested directly inside caller → pass own frame (`ldaf`)
   - callee is a sibling → pass parent frame (caller's slot 0)

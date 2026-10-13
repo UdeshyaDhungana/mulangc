@@ -8,7 +8,7 @@ pub type RegisterNumber = usize;
 pub struct FunctionDefinitionSpec {
     pub node_id: String,
     pub frame_size: MemoryUnits,
-    pub argc: usize,
+    pub argc_sizes: Vec<MemoryUnits>,
 }
 
 #[derive(Debug, Clone)]
@@ -120,22 +120,24 @@ pub enum Instruction {
 
 pub struct IRFunction {
     instructions: Vec<Instruction>,
-    // Whether or not this IR function's lowering process
-    // is complete
-    is_lowering_complete: bool,
     next_register_number: RegisterNumber,
+
+    // Internals
+    is_lowering_complete: bool,
 }
 
 impl IRFunction {
-    pub fn new(node_id: &str, frame_size: MemoryUnits, argc: usize) -> Self {
+    pub fn new(node_id: &str, frame_size: MemoryUnits, argc_sizes: Vec<MemoryUnits>) -> Self {
+        // 1 memory slot is reserved for the static link
+        let total_size: MemoryUnits = argc_sizes.iter().sum::<MemoryUnits>() + 1;
         IRFunction {
             instructions: vec![Instruction::FunctionDefinition(FunctionDefinitionSpec {
                 node_id: String::from(node_id),
                 frame_size,
-                argc,
+                argc_sizes,
             })],
             is_lowering_complete: false,
-            next_register_number: argc + 1,
+            next_register_number: total_size,
         }
     }
 
@@ -164,9 +166,9 @@ impl IRFunction {
         panic!("First instruction of a function must be its definition")
     }
 
-    pub fn argc(&self) -> usize {
+    pub fn argc_sizes(&self) -> &Vec<MemoryUnits> {
         if let Instruction::FunctionDefinition(definition) = &self.instructions[0] {
-            return definition.argc;
+            return &definition.argc_sizes;
         }
         panic!("First instruction of a function must be its definition")
     }
@@ -241,8 +243,15 @@ impl fmt::Display for Instruction {
             Instruction::FunctionDefinition(FunctionDefinitionSpec {
                 node_id,
                 frame_size,
-                argc,
-            }) => write!(formatter, "fn {node_id}, frame_size={frame_size}, {argc}"),
+                argc_sizes: argc,
+            }) => {
+                let argc_strs: Vec<String> = argc.iter().map(|s| s.to_string()).collect();
+                write!(
+                    formatter,
+                    "fn {node_id}, frame_size={frame_size}, {}",
+                    argc_strs.join(", ")
+                )
+            }
             Instruction::LoadImmediate(LoadImmediateSpec {
                 dst_reg: register_num,
                 immediate,
