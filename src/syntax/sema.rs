@@ -427,12 +427,12 @@ impl Sema {
                 if var_type_classification == VoidType {
                     return Err(Diagnostic::error(
                         identifier.span,
-                        format!("SEMA:: `void` is not assignable"),
+                        "SEMA:: `void` is not assignable".to_string(),
                     ));
                 }
 
-                if expr_type != var_type.classification {
-                    if !expr_type.is_convertible_to(&var_type.classification) {
+                if expr_type != var_type.classification
+                    && !expr_type.is_convertible_to(&var_type.classification) {
                         return Err(Diagnostic::error(
                             identifier.span,
                             format!(
@@ -440,7 +440,6 @@ impl Sema {
                             ),
                         ));
                     }
-                }
 
                 self.get_current_scope()
                     .add_variable_identifier(identifier, var_type.clone());
@@ -779,8 +778,8 @@ impl Sema {
         };
 
         match else_block.deref() {
-            Else::If(conditional) => self.does_conditional_definitely_return(&conditional),
-            Else::Block(b) => self.does_block_definitely_return(&b),
+            Else::If(conditional) => self.does_conditional_definitely_return(conditional),
+            Else::Block(b) => self.does_block_definitely_return(b),
         }
     }
 
