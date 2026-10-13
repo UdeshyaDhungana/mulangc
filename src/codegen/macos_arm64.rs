@@ -9,7 +9,6 @@ use crate::{
 };
 
 const MEMORY_UNIT_SCALE: usize = 8;
-pub const REQUIRED_STACK_BYTES: usize = 64 * 1024 * 1024;
 const STACK_ALIGNMENT: usize = 16;
 // Saved x29 and x30, pushed by every prologue
 const FRAME_RECORD_BYTES: usize = 16;

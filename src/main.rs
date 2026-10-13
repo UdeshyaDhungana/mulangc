@@ -1,9 +1,7 @@
-use std::io;
 use std::path::Path;
 use std::process::ExitCode;
-use std::thread;
 
-use mulang::codegen::macos_arm64::{CodeGenerator, REQUIRED_STACK_BYTES};
+use mulang::codegen::macos_arm64::CodeGenerator;
 use mulang::diagnostics::render_all;
 use mulang::ir::instructions::format_program;
 use mulang::ir::lowering::Lowerer;
@@ -20,27 +18,14 @@ enum Mode {
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
 
-    let work = move || match arguments.as_slice() {
+    match arguments.as_slice() {
         [path] => compile_file(path, Mode::Assemble),
         [flag, path] if flag == "--irtext" => compile_file(path, Mode::EmitIRText),
         _ => {
             eprintln!("usage: mulang [--irtext] program.muji");
             ExitCode::FAILURE
         }
-    };
-
-    thread::Builder::new()
-        .stack_size(REQUIRED_STACK_BYTES)
-        .spawn(work)
-        .and_then(|compiler_thread| {
-            compiler_thread
-                .join()
-                .map_err(|_| io::Error::other("the compiler panicked"))
-        })
-        .unwrap_or_else(|error| {
-            eprintln!("mulang: {error}");
-            ExitCode::FAILURE
-        })
+    }
 }
 
 fn compile_file(path: &str, mode: Mode) -> ExitCode {
