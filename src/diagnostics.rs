@@ -1,5 +1,6 @@
 use std::fmt::Write as _;
 
+// Span is a range over tokens
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
     pub start: usize,
@@ -11,6 +12,8 @@ impl Span {
         Self { start, end }
     }
 
+    // joined_with returns a span that ranges from minimum of the first
+    // to the maximum of the second
     pub fn joined_with(self, other: Span) -> Self {
         Self::new(self.start.min(other.start), self.end.max(other.end))
     }
