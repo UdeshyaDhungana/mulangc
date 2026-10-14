@@ -37,7 +37,6 @@ fn compile_file(path: &str, mode: Mode) -> ExitCode {
         }
     };
 
-    // AST
     let ast = match syntax::parse(&source) {
         Ok(ast) => ast,
         Err(diagnostics) => {

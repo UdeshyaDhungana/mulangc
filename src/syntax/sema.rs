@@ -4,12 +4,12 @@ use std::{collections::HashMap, ops::Deref};
 use crate::{
     diagnostics::{Diagnostic, Span},
     syntax::{
-        AST, AssignmentTarget, Block, Conditional, Else, Expression, ExpressionKind,
-        FunctionDefinition, Identifier, Statement,
+        AST, Block, Conditional, Else, Expression, ExpressionKind, FunctionDefinition, Identifier,
+        Statement,
         StatementKind::{self},
         ast::{
-            VariableClassification::{self, BooleanType, IntegerType, VoidType},
-            VariableType,
+            SpannedVariableType,
+            VariableType::{self, BooleanType, IntegerType, VoidType},
         },
     },
 };
@@ -23,18 +23,18 @@ pub const __DEBUG_BOL_BOOL_FUNCTION_NODE_ID: &str = "__debug_bolbool";
 // Scope's symbol info
 struct FunctionSymbolInfo {
     identifier: Identifier,
-    parameters_types: Vec<VariableType>,
-    return_type: VariableType,
+    parameters_types: Vec<SpannedVariableType>,
+    return_type: SpannedVariableType,
 }
 
 struct VariableSymbolInfo {
     identifier: Identifier,
-    var_type: VariableType,
+    var_type: SpannedVariableType,
 }
 
 impl VariableSymbolInfo {
-    fn get_classification(&self) -> VariableClassification {
-        self.var_type.classification.clone()
+    fn get_classification(&self) -> VariableType {
+        self.var_type.var_type.clone()
     }
 }
 
@@ -48,7 +48,7 @@ enum ScopeType {
     Function {
         node_id: String,
         memory_units_consumed: MemoryUnits,
-        return_type_classification: VariableClassification,
+        return_type_classification: VariableType,
     },
     Block,
 }
@@ -66,7 +66,7 @@ impl Scope {
         }
     }
 
-    fn add_variable_identifier(&mut self, identifier: &Identifier, var_type: VariableType) {
+    fn add_variable_identifier(&mut self, identifier: &Identifier, var_type: SpannedVariableType) {
         self.symbol_table.insert(
             identifier.name.clone(),
             SymbolInfo::Variable(VariableSymbolInfo {
@@ -79,8 +79,8 @@ impl Scope {
     fn add_function_identifier(
         &mut self,
         identifier: &Identifier,
-        fn_parameters_types: Vec<VariableType>,
-        return_type: VariableType,
+        fn_parameters_types: Vec<SpannedVariableType>,
+        return_type: SpannedVariableType,
     ) {
         self.symbol_table.insert(
             identifier.name.clone(),
@@ -113,7 +113,7 @@ impl Counter {
 pub struct VariableAttributes {
     pub frame_depth: usize,
     pub offset_from_frame_base: MemoryUnits,
-    pub var_type: VariableType,
+    pub var_type: SpannedVariableType,
 }
 
 #[derive(Debug)]
@@ -168,8 +168,8 @@ impl Analysis {
 
 struct LookaheadFunctionDefinition {
     identifier: Identifier,
-    parameter_types: Vec<VariableType>,
-    return_type: VariableType,
+    parameter_types: Vec<SpannedVariableType>,
+    return_type: SpannedVariableType,
 }
 
 pub struct Sema {
@@ -242,7 +242,7 @@ impl Sema {
     fn allocate_slot_for_variable_in_current_frame(
         &mut self,
         identifier: &Identifier,
-        var_type: VariableType,
+        var_type: SpannedVariableType,
     ) {
         let depth = self.get_current_frame_depth();
         let enclosing_frame = self.get_current_frame();
@@ -298,13 +298,13 @@ impl Sema {
                 node_id: String::from(__DEBUG_BOL_FUNCTION_NODE_ID),
                 span: Span::new(0, 0),
             },
-            vec![VariableType {
+            vec![SpannedVariableType {
                 span: Span::new(0, 0),
-                classification: IntegerType,
+                var_type: IntegerType,
             }],
-            VariableType {
+            SpannedVariableType {
                 span: Span::new(0, 0),
-                classification: VariableClassification::VoidType,
+                var_type: VariableType::VoidType,
             },
         );
         self.record_frame_location_in_analysis(String::from(__DEBUG_BOL_FUNCTION_NODE_ID), 0);
@@ -316,13 +316,13 @@ impl Sema {
                 node_id: String::from(__DEBUG_BOL_BOOL_FUNCTION_NODE_ID),
                 span: Span::new(0, 0),
             },
-            vec![VariableType {
+            vec![SpannedVariableType {
                 span: Span::new(0, 0),
-                classification: BooleanType,
+                var_type: BooleanType,
             }],
-            VariableType {
+            SpannedVariableType {
                 span: Span::new(0, 0),
-                classification: VariableClassification::VoidType,
+                var_type: VariableType::VoidType,
             },
         );
         self.record_frame_location_in_analysis(String::from(__DEBUG_BOL_BOOL_FUNCTION_NODE_ID), 0);
@@ -333,7 +333,7 @@ impl Sema {
         self.push_scope(Scope::new(ScopeType::Function {
             node_id: String::from(MAIN_FUNCTION_NODE_ID),
             memory_units_consumed: 0,
-            return_type_classification: VariableClassification::IntegerType,
+            return_type_classification: VariableType::IntegerType,
         }));
 
         self.add_debug_builtins();
@@ -367,7 +367,10 @@ impl Sema {
                 self.lookahead_function_definitions
                     .push(LookaheadFunctionDefinition {
                         identifier: identifier.clone(),
-                        parameter_types: parameters.iter().map(|p| p.var_type.clone()).collect(),
+                        parameter_types: parameters
+                            .iter()
+                            .map(|p| p.spanned_var_type.clone())
+                            .collect(),
                         return_type: return_type.clone(),
                     })
             }
@@ -407,7 +410,7 @@ impl Sema {
             StatementKind::Declaration {
                 identifier,
                 value,
-                var_type,
+                spanned_var_type,
             } => {
                 let expr_type = self.analyse_expression(value)?;
                 let identifier_name = identifier.name.clone();
@@ -422,7 +425,7 @@ impl Sema {
                     ));
                 }
 
-                let var_type_classification = var_type.classification.clone();
+                let var_type_classification = spanned_var_type.var_type.clone();
 
                 if var_type_classification == VoidType {
                     return Err(Diagnostic::error(
@@ -431,7 +434,7 @@ impl Sema {
                     ));
                 }
 
-                if !expr_type.is_convertible_to(&var_type.classification) {
+                if !expr_type.is_convertible_to(&spanned_var_type.var_type) {
                     return Err(Diagnostic::error(
                         identifier.span,
                         format!(
@@ -441,8 +444,11 @@ impl Sema {
                 }
 
                 self.get_current_scope()
-                    .add_variable_identifier(identifier, var_type.clone());
-                self.allocate_slot_for_variable_in_current_frame(identifier, var_type.clone());
+                    .add_variable_identifier(identifier, spanned_var_type.clone());
+                self.allocate_slot_for_variable_in_current_frame(
+                    identifier,
+                    spanned_var_type.clone(),
+                );
                 Ok(())
             }
             StatementKind::Return(expression) => {
@@ -495,7 +501,10 @@ impl Sema {
 
                 self.get_current_scope().add_function_identifier(
                     identifier,
-                    parameters.iter().map(|p| p.var_type.clone()).collect(),
+                    parameters
+                        .iter()
+                        .map(|p| p.spanned_var_type.clone())
+                        .collect(),
                     return_type.clone(),
                 );
 
@@ -508,11 +517,11 @@ impl Sema {
                 self.push_scope(Scope::new(ScopeType::Function {
                     node_id: identifier.node_id.clone(),
                     memory_units_consumed: 0,
-                    return_type_classification: return_type.classification.clone(),
+                    return_type_classification: return_type.var_type.clone(),
                 }));
                 for parameter in parameters {
                     let parameter_name = parameter.identifier.name.clone();
-                    let param_type = parameter.var_type.clone();
+                    let param_type = parameter.spanned_var_type.clone();
                     // Each parameter identifier must be unique
                     if self
                         .get_current_scope()
@@ -532,7 +541,10 @@ impl Sema {
                 }
                 self.get_current_scope().add_function_identifier(
                     identifier,
-                    parameters.iter().map(|t| t.var_type.clone()).collect(),
+                    parameters
+                        .iter()
+                        .map(|t| t.spanned_var_type.clone())
+                        .collect(),
                     return_type.clone(),
                 );
                 self.analyse_statements_collecting_diagnostics(&body.statements);
@@ -543,7 +555,7 @@ impl Sema {
                 // Type checking is not needed here since it's captured in the
                 // analysis of each return statement
                 if !self.does_block_definitely_return(body)
-                    && return_type.classification != VariableClassification::VoidType
+                    && return_type.var_type != VariableType::VoidType
                 {
                     // C style error diagnostic
                     let body_end_span = body.span.end;
@@ -588,10 +600,7 @@ impl Sema {
         }
     }
 
-    fn analyse_expression(
-        &mut self,
-        expression: &Expression,
-    ) -> Result<VariableClassification, Diagnostic> {
+    fn analyse_expression(&mut self, expression: &Expression) -> Result<VariableType, Diagnostic> {
         match &expression.kind {
             ExpressionKind::Identifier(identifier) => {
                 let Some(symbol_info) = self.lookup_syminfo_for_identifier(identifier.name.clone())
@@ -630,9 +639,8 @@ impl Sema {
                 }
                 Ok(left_type)
             }
-            ExpressionKind::Assignment { target, value } => {
+            ExpressionKind::Assignment { identifier, value } => {
                 let expr_classification = self.analyse_expression(value)?;
-                let AssignmentTarget::Variable(identifier) = target;
                 let Some(symbol_info) = self.lookup_syminfo_for_identifier(identifier.name.clone())
                 else {
                     return Err(Diagnostic::error(
@@ -652,7 +660,7 @@ impl Sema {
                         let resolved_identifier = variable_sym_info.identifier.clone();
                         let target_type = variable_sym_info.var_type.clone();
 
-                        if variable_sym_info.var_type.classification != expr_classification {
+                        if variable_sym_info.var_type.var_type != expr_classification {
                             return Err(Diagnostic::error(
                                 resolved_identifier.span,
                                 format!(
@@ -671,47 +679,46 @@ impl Sema {
             }
             ExpressionKind::Call { callee, arguments } => {
                 let function_name = callee.name.clone();
-                let return_value_type: VariableClassification;
+                let return_value_type: VariableType;
 
                 // Scope stack takes priority over lookahead definitions
-                let (definition_node_id, param_types) = match self
-                    .lookup_syminfo_for_identifier(function_name.clone())
-                {
-                    Some(SymbolInfo::Variable(..)) => {
-                        return Err(Diagnostic::error(
-                            expression.span,
-                            "SEMA:: Called object is not a function",
-                        ));
-                    }
-                    Some(SymbolInfo::Function(FunctionSymbolInfo {
-                        identifier,
-                        parameters_types,
-                        return_type,
-                    })) => {
-                        return_value_type = return_type.classification.clone();
-                        (identifier.node_id.clone(), parameters_types.clone())
-                    }
-                    // Not in scope yet, so it must be defined further down
-                    None => match self
-                        .lookahead_function_definitions
-                        .iter()
-                        .find(|fn_definition| fn_definition.identifier.name == function_name)
-                    {
-                        Some(fn_definition) => {
-                            return_value_type = fn_definition.return_type.classification.clone();
-                            (
-                                fn_definition.identifier.node_id.clone(),
-                                fn_definition.parameter_types.clone(),
-                            )
-                        }
-                        None => {
+                let (definition_node_id, param_types) =
+                    match self.lookup_syminfo_for_identifier(function_name.clone()) {
+                        Some(SymbolInfo::Variable(..)) => {
                             return Err(Diagnostic::error(
-                                callee.span,
-                                format!("SEMA:: Usage of undefined function {function_name}"),
+                                expression.span,
+                                "SEMA:: Called object is not a function",
                             ));
                         }
-                    },
-                };
+                        Some(SymbolInfo::Function(FunctionSymbolInfo {
+                            identifier,
+                            parameters_types,
+                            return_type,
+                        })) => {
+                            return_value_type = return_type.var_type.clone();
+                            (identifier.node_id.clone(), parameters_types.clone())
+                        }
+                        // Not in scope yet, so it must be defined further down
+                        None => match self
+                            .lookahead_function_definitions
+                            .iter()
+                            .find(|fn_definition| fn_definition.identifier.name == function_name)
+                        {
+                            Some(fn_definition) => {
+                                return_value_type = fn_definition.return_type.var_type.clone();
+                                (
+                                    fn_definition.identifier.node_id.clone(),
+                                    fn_definition.parameter_types.clone(),
+                                )
+                            }
+                            None => {
+                                return Err(Diagnostic::error(
+                                    callee.span,
+                                    format!("SEMA:: Usage of undefined function {function_name}"),
+                                ));
+                            }
+                        },
+                    };
 
                 let fn_arity = param_types.len();
                 if fn_arity != arguments.len() {
@@ -733,7 +740,7 @@ impl Sema {
                     let arg = &arguments[i];
                     let arg_type = self.analyse_expression(arg)?;
                     let param_type = &param_types[i];
-                    if arg_type != param_type.classification {
+                    if arg_type != param_type.var_type {
                         return Err(Diagnostic::error(
                             arg.span,
                             format!(

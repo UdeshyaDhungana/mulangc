@@ -3,6 +3,7 @@ use std::mem::discriminant;
 use crate::diagnostics::{Diagnostic, Span};
 use crate::syntax::ast::*;
 use crate::syntax::sema::Counter;
+use crate::syntax::token::Token::Semicolon;
 use crate::syntax::token::{SpannedToken, Token};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -53,15 +54,11 @@ impl Parser<'_> {
         let mut statements = Vec::new();
 
         while !self.is_at(&Token::EndOfInput) {
-            let position_before_statement = self.position;
             match self.parse_statement() {
                 Ok(statement) => statements.push(statement),
                 Err(diagnostic) => {
                     self.diagnostics.push(diagnostic);
-                    self.recover_at_statement_boundary();
-                    if self.position == position_before_statement {
-                        self.advance();
-                    }
+                    self.recover_at_next_statement_boundary();
                 }
             }
         }
@@ -73,21 +70,15 @@ impl Parser<'_> {
         format!("{identifier_name}_{next}")
     }
 
-    fn recover_at_statement_boundary(&mut self) {
+    fn recover_at_next_statement_boundary(&mut self) {
         while !self.is_at(&Token::EndOfInput) {
-            if matches!(self.current_token(), Token::Semicolon) {
-                self.advance();
+            // A statement can either begin from one of these tokens
+            // or the current statement can end with a semicolon
+            if STATEMENT_BEGINNER_TOKENS.contains(self.current_token()) {
                 return;
             }
-            if matches!(
-                self.current_token(),
-                Token::Declare
-                    | Token::Return
-                    | Token::Function
-                    | Token::If
-                    | Token::While
-                    | Token::For
-            ) {
+            if matches!(self.current_token(), Token::Semicolon) {
+                self.advance();
                 return;
             }
             self.advance();
@@ -97,14 +88,21 @@ impl Parser<'_> {
     /* ---------------------------------------------------------------- statements */
 
     fn parse_statement(&mut self) -> Result<Statement, Diagnostic> {
-        match self.current_token() {
-            Token::Declare => self.parse_declaration(),
-            Token::Return => self.parse_return(),
-            Token::Function => self.parse_function(),
-            Token::If => self.parse_if(),
-            Token::While => self.parse_while(),
-            Token::For => self.parse_for(),
-            _ => self.parse_expression_statement(),
+        let current_token = self.current_token();
+        if STATEMENT_BEGINNER_TOKENS.contains(current_token) {
+            match current_token {
+                Token::Declare => self.parse_declaration(),
+                Token::Return => self.parse_return(),
+                Token::Function => self.parse_function(),
+                Token::If => self.parse_if(),
+                Token::While => self.parse_while(),
+                Token::For => self.parse_for(),
+                _ => panic!(
+                    "PARSER:: You added support for a new kind of statement and didn't write its parser"
+                ),
+            }
+        } else {
+            self.parse_expression_statement()
         }
     }
 
@@ -112,16 +110,16 @@ impl Parser<'_> {
         let start = self.expect(Token::Declare)?;
         let name = self.expect_identifier()?;
         self.expect(Token::TypeSpecifier)?;
-        let var_type = self.expect_variable_type()?;
+        let spanned_var_type = self.expect_variable_type()?;
         self.expect(Token::Assign)?;
         let value = self.parse_expression(Precedence::Lowest)?;
-        let end = self.expect_statement_terminator()?;
+        let end = self.expect_semicolon()?;
 
         Ok(Statement {
             kind: StatementKind::Declaration {
                 identifier: name,
                 value,
-                var_type,
+                spanned_var_type,
             },
             span: start.joined_with(end),
         })
@@ -130,7 +128,7 @@ impl Parser<'_> {
     fn parse_return(&mut self) -> Result<Statement, Diagnostic> {
         let start = self.expect(Token::Return)?;
         let value = self.parse_expression(Precedence::Lowest)?;
-        let end = self.expect_statement_terminator()?;
+        let end = self.expect_semicolon()?;
 
         Ok(Statement {
             kind: StatementKind::Return(value),
@@ -140,39 +138,51 @@ impl Parser<'_> {
 
     fn parse_if(&mut self) -> Result<Statement, Diagnostic> {
         let start = self.expect(Token::If)?;
-        let conditional = self.parse_conditional()?;
+        let (conditional, term_span) = self.parse_conditional()?;
 
         Ok(Statement {
-            span: start.joined_with(self.conditional_end_span(&conditional)),
+            span: start.joined_with(term_span),
             kind: StatementKind::If(conditional),
         })
     }
 
-    fn parse_conditional(&mut self) -> Result<Conditional, Diagnostic> {
+    // parse_conditional parses a condition part of a if statement, and returns the
+    // span for where its terminator block
+    fn parse_conditional(&mut self) -> Result<(Conditional, Span), Diagnostic> {
         self.expect(Token::LeftParenthesis)?;
         let condition = self.parse_expression(Precedence::Lowest)?;
         self.expect(Token::RightParenthesis)?;
         let then = self.parse_block()?;
 
+        let mut terminating_span = then.span;
+
         let otherwise = if self.is_at(&Token::Else) {
             self.advance();
             Some(Box::new(if self.is_at(&Token::If) {
                 self.advance();
-                Else::If(self.parse_conditional()?)
+                let (conditional, conditional_span_end) = self.parse_conditional()?;
+                terminating_span = conditional_span_end;
+                Else::If(conditional)
             } else {
-                Else::Block(self.parse_block()?)
+                let else_block = self.parse_block()?;
+                terminating_span = else_block.span;
+                Else::Block(else_block)
             }))
         } else {
             None
         };
 
         let next_id = self.counter.advance();
-        Ok(Conditional {
-            node_id: format!("yedi_{next_id}"),
-            condition,
-            then,
-            otherwise,
-        })
+
+        Ok((
+            Conditional {
+                node_id: format!("yedi_{next_id}"),
+                condition,
+                then,
+                otherwise,
+            },
+            terminating_span,
+        ))
     }
 
     fn parse_while(&mut self) -> Result<Statement, Diagnostic> {
@@ -195,21 +205,21 @@ impl Parser<'_> {
 
     fn parse_for(&mut self) -> Result<Statement, Diagnostic> {
         let start = self.expect(Token::For)?;
-        self.expect(Token::LeftParenthesis)?;
+        let left_paren_span = self.expect(Token::LeftParenthesis)?;
 
-        let initialiser = match self.current_token() {
+        let initializer = self.current_token();
+        let initializer_stmt = match initializer {
             Token::Semicolon => {
                 self.advance();
                 None
             }
             Token::Declare => Some(Box::new(self.parse_declaration()?)),
             _ => {
-                let expression = self.parse_expression(Precedence::Lowest)?;
-                let end = self.expect(Token::Semicolon)?;
-                Some(Box::new(Statement {
-                    span: expression.span.joined_with(end),
-                    kind: StatementKind::Expression(expression),
-                }))
+                return Err(Diagnostic::error(
+                    left_paren_span,
+                    "`fanfani` can only have declaration as its initializer.",
+                )
+                .with_help("Hint: initializer is optional"));
             }
         };
 
@@ -223,7 +233,7 @@ impl Parser<'_> {
         Ok(Statement {
             span: start.joined_with(body.span),
             kind: StatementKind::For {
-                initialiser,
+                initialiser: initializer_stmt,
                 condition: Box::new(condition),
                 update: Box::new(update),
                 body,
@@ -234,13 +244,8 @@ impl Parser<'_> {
 
     fn parse_expression_statement(&mut self) -> Result<Statement, Diagnostic> {
         let expression = self.parse_expression(Precedence::Lowest)?;
-        let mut span = expression.span;
-
-        if self.is_at(&Token::Semicolon) {
-            span = span.joined_with(self.current_span());
-            self.advance();
-        }
-
+        let semicolon_span = self.expect(Semicolon)?;
+        let span = expression.span.joined_with(semicolon_span);
         Ok(Statement {
             kind: StatementKind::Expression(expression),
             span,
@@ -267,13 +272,13 @@ impl Parser<'_> {
         })
     }
 
-    /* --------------------------------------------------------------- expressions */
+    /* expressions ---------------------------------------------------------------  */
 
     fn parse_expression(&mut self, precedence: Precedence) -> Result<Expression, Diagnostic> {
         let mut left = self.parse_prefix()?;
 
         while precedence < self.precedence_of(self.current_token()) {
-            left = self.parse_infix(left)?;
+            left = self.parse_infix_expression(left)?;
         }
         Ok(left)
     }
@@ -304,7 +309,7 @@ impl Parser<'_> {
         Ok(Expression { kind, span })
     }
 
-    fn parse_infix(&mut self, left: Expression) -> Result<Expression, Diagnostic> {
+    fn parse_infix_expression(&mut self, left: Expression) -> Result<Expression, Diagnostic> {
         match self.current_token() {
             Token::LeftParenthesis => self.parse_call(left),
             Token::Assign => self.parse_assignment(left),
@@ -351,13 +356,13 @@ impl Parser<'_> {
 
     fn parse_assignment(&mut self, left: Expression) -> Result<Expression, Diagnostic> {
         self.expect(Token::Assign)?;
-        let target = self.assignment_target_of(left)?;
+        let identifier = self.assigned_identifier(left)?;
         let value = self.parse_expression(Precedence::Lowest)?;
 
         Ok(Expression {
-            span: self.target_span(&target).joined_with(value.span),
+            span: identifier.span.joined_with(value.span),
             kind: ExpressionKind::Assignment {
-                target,
+                identifier,
                 value: Box::new(value),
             },
         })
@@ -402,16 +407,16 @@ impl Parser<'_> {
         let parameters = self.parse_function_parameters()?;
         self.expect(Token::RightParenthesis)?;
 
-        let return_type: VariableType;
+        let return_type: SpannedVariableType;
 
         if let Token::VariableType(t) = self.current_token().clone() {
             let span = self.current_span();
             self.advance();
-            return_type = VariableType::from_variable_type_token(t, span)
+            return_type = SpannedVariableType::from_variable_type_token(t, span)
         } else {
-            return_type = VariableType {
+            return_type = SpannedVariableType {
                 span: name.span,
-                classification: VariableClassification::VoidType,
+                var_type: VariableType::VoidType,
             }
         }
         let body = self.parse_block()?;
@@ -439,11 +444,11 @@ impl Parser<'_> {
             }
             let identifier = self.expect_identifier()?;
             self.expect(Token::TypeSpecifier)?;
-            let var_type = self.expect_variable_type()?;
-            let span = identifier.span.joined_with(var_type.span);
+            let spanned_var_type = self.expect_variable_type()?;
+            let span = identifier.span.joined_with(spanned_var_type.span);
             items.push(FunctionParameter {
                 identifier,
-                var_type,
+                spanned_var_type,
                 span,
             });
             if self.is_at(&Token::Comma) {
@@ -500,16 +505,16 @@ impl Parser<'_> {
         })
     }
 
-    fn expect_variable_type(&mut self) -> Result<VariableType, Diagnostic> {
+    fn expect_variable_type(&mut self) -> Result<SpannedVariableType, Diagnostic> {
         let Token::VariableType(t) = self.current_token().clone() else {
             return Err(self.error_at_current("expected a type"));
         };
         let span = self.current_span();
         self.advance();
-        Ok(VariableType::from_variable_type_token(t, span))
+        Ok(SpannedVariableType::from_variable_type_token(t, span))
     }
 
-    fn expect_statement_terminator(&mut self) -> Result<Span, Diagnostic> {
+    fn expect_semicolon(&mut self) -> Result<Span, Diagnostic> {
         self.expect(Token::Semicolon)
             .map_err(|diagnostic| diagnostic.with_help("this statement must end with `;`"))
     }
@@ -541,33 +546,16 @@ impl Parser<'_> {
         }
     }
 
-    fn assignment_target_of(
-        &mut self,
-        expression: Expression,
-    ) -> Result<AssignmentTarget, Diagnostic> {
+    fn assigned_identifier(&mut self, expression: Expression) -> Result<Identifier, Diagnostic> {
         let span = expression.span;
         match expression.kind {
-            ExpressionKind::Identifier(identifier) => Ok(AssignmentTarget::Variable(Identifier {
+            ExpressionKind::Identifier(identifier) => Ok(Identifier {
                 name: identifier.name.clone(),
                 span,
                 node_id: identifier.node_id,
-            })),
+            }),
             _ => Err(Diagnostic::error(span, "cannot assign to this expression")
                 .with_help("the left of `=` must be a variable")),
-        }
-    }
-
-    fn target_span(&self, target: &AssignmentTarget) -> Span {
-        match target {
-            AssignmentTarget::Variable(name) => name.span,
-        }
-    }
-
-    fn conditional_end_span(&self, conditional: &Conditional) -> Span {
-        match conditional.otherwise.as_deref() {
-            None => conditional.then.span,
-            Some(Else::Block(block)) => block.span,
-            Some(Else::If(nested)) => self.conditional_end_span(nested),
         }
     }
 

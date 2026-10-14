@@ -8,7 +8,7 @@ use crate::{
         ReturnSpec, StoreFromRegisterSpec, UnaryOpSpec, UnaryOperation,
     },
     syntax::{
-        AST, AssignmentTarget,
+        AST,
         BinaryOperator::{self},
         Block, Conditional, Else, Expression, ExpressionKind, Statement, StatementKind,
         UnaryOperator,
@@ -163,7 +163,7 @@ impl Lowerer {
                     function_definition
                         .parameters
                         .iter()
-                        .map(|p| p.var_type.size())
+                        .map(|p| p.spanned_var_type.size())
                         .collect(),
                 );
                 let frame_address_reg = self.get_next_register();
@@ -361,9 +361,8 @@ impl Lowerer {
                 }));
                 dst_reg
             }
-            ExpressionKind::Assignment { target, value } => {
+            ExpressionKind::Assignment { identifier, value } => {
                 let expression_reg: RegisterNumber = self.lower_expression(*value);
-                let AssignmentTarget::Variable(identifier) = target;
                 let resolved_node_id = self.analysis.resolve(&identifier.node_id);
                 let (frame_pointer_reg, offset) = self
                     .get_frame_pointer_reg_and_logical_local_offset_for_node_id(resolved_node_id);

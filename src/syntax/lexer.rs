@@ -27,7 +27,7 @@ struct Lexer<'source> {
 impl<'source> Lexer<'source> {
     fn run(&mut self) {
         loop {
-            self.skip_ignored_text();
+            self.skip_whitespaces_and_comments();
             let start = self.offset;
 
             let Some(character) = self.advance() else {
@@ -79,7 +79,7 @@ impl<'source> Lexer<'source> {
         }
     }
 
-    fn skip_ignored_text(&mut self) {
+    fn skip_whitespaces_and_comments(&mut self) {
         loop {
             match self.current() {
                 Some(character) if character.is_whitespace() => {
@@ -101,7 +101,7 @@ impl<'source> Lexer<'source> {
             self.advance_while(|character| character.is_ascii_digit());
             self.emit(Diagnostic::error(
                 Span::new(start, self.offset),
-                "mulang has no decimal numbers",
+                "mulang doesn't support floating point numbers yet",
             ));
             return;
         }
@@ -117,7 +117,7 @@ impl<'source> Lexer<'source> {
     }
 
     fn scan_name(&mut self, start: usize) {
-        self.advance_while(is_name_continuation);
+        self.advance_while(|c| is_name_start(c) || c.is_numeric());
         let word = &self.source[start..self.offset];
         self.push(keyword_or_identifier(word), start);
     }
@@ -167,10 +167,6 @@ impl<'source> Lexer<'source> {
 
 fn is_name_start(character: char) -> bool {
     character.is_alphabetic() || character == '_'
-}
-
-fn is_name_continuation(character: char) -> bool {
-    is_name_start(character) || character.is_numeric()
 }
 
 #[cfg(test)]
@@ -282,7 +278,10 @@ mod tests {
     #[test]
     fn rejects_decimal_numbers() {
         let diagnostics = tokenize("42 69.69").expect_err("should fail");
-        assert_eq!(diagnostics[0].message, "mulang has no decimal numbers");
+        assert_eq!(
+            diagnostics[0].message,
+            "mulang doesn't support floating point numbers yet"
+        );
     }
 
     #[test]

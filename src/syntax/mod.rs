@@ -5,8 +5,8 @@ pub mod sema;
 mod token;
 
 pub use ast::{
-    AST, AssignmentTarget, BinaryOperator, Block, Conditional, Else, Expression, ExpressionKind,
-    FunctionDefinition, Identifier, Statement, StatementKind, UnaryOperator,
+    AST, BinaryOperator, Block, Conditional, Else, Expression, ExpressionKind, FunctionDefinition,
+    Identifier, Statement, StatementKind, UnaryOperator,
 };
 
 use crate::diagnostics::Diagnostic;
@@ -162,9 +162,14 @@ mod tests {
             "fanfani (thoos i: int = 0; (i < 3); (i = (i + 1))) {\n    i;\n}"
         );
         assert_eq!(
-            reprint("fanfani (i = 0; i < 3; i = i + 1) { i; }"),
-            "fanfani ((i = 0); (i < 3); (i = (i + 1))) {\n    i;\n}"
+            reprint("fanfani (; i < 3; i = i + 1) { i; }"),
+            "fanfani (; (i < 3); (i = (i + 1))) {\n    i;\n}"
         );
+    }
+
+    #[test]
+    fn rejects_an_assignment_as_a_for_loop_initialiser() {
+        assert!(first_error("fanfani (i = 0; i < 3; i = i + 1) { i; }").contains("initializer"));
     }
 
     #[test]
@@ -202,6 +207,14 @@ mod tests {
     #[test]
     fn requires_a_semicolon_after_a_declaration() {
         assert!(first_error("thoos x: int = 1").starts_with("expected `;`"));
+    }
+
+    #[test]
+    fn requires_a_semicolon_after_an_expression() {
+        assert!(first_error("bol(1)").starts_with("expected `;`"));
+        assert!(first_error("bol(1) bol(2);").starts_with("expected `;`"));
+        assert!(first_error("x 5;").starts_with("expected `;`"));
+        assert!(first_error("yedi (1) { bol(1) }").starts_with("expected `;`"));
     }
 
     #[test]

@@ -2,8 +2,16 @@ use std::fmt::{self, Display};
 
 use crate::{
     diagnostics::Span,
-    syntax::{sema::MemoryUnits, token::VariableTypeToken},
+    syntax::{
+        sema::MemoryUnits,
+        token::{
+            Token::{self, Declare, For, Function, If, Return, While},
+            VariableTypeToken,
+        },
+    },
 };
+
+pub const STATEMENT_BEGINNER_TOKENS: &[Token] = &[Declare, Return, Function, If, While, For];
 
 #[derive(Clone, Debug)]
 pub struct AST {
@@ -19,21 +27,21 @@ pub struct Identifier {
 
 // Actual type of the variable
 #[derive(Clone, Debug, PartialEq)]
-pub enum VariableClassification {
+pub enum VariableType {
     IntegerType,
     BooleanType,
     VoidType,
 }
 
-impl VariableClassification {
+impl VariableType {
     fn size(&self) -> MemoryUnits {
         match self {
-            VariableClassification::IntegerType | VariableClassification::BooleanType => 1,
-            VariableClassification::VoidType => 0,
+            VariableType::IntegerType | VariableType::BooleanType => 1,
+            VariableType::VoidType => 0,
         }
     }
 
-    pub fn is_convertible_to(&self, target: &VariableClassification) -> bool {
+    pub fn is_convertible_to(&self, target: &VariableType) -> bool {
         match self {
             Self::IntegerType => match target {
                 Self::BooleanType => true,
@@ -50,7 +58,7 @@ impl VariableClassification {
     }
 }
 
-impl Display for VariableClassification {
+impl Display for VariableType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let to_write = match self {
             Self::IntegerType => "int",
@@ -61,32 +69,33 @@ impl Display for VariableClassification {
     }
 }
 
-// A node in the AST recording the classification and a span
+// SpannedVariableType is a node in the AST
+// So, it has a recorded span alongside the variable type
 #[derive(Debug, Clone)]
-pub struct VariableType {
+pub struct SpannedVariableType {
     pub span: Span,
-    pub classification: VariableClassification,
+    pub var_type: VariableType,
 }
 
-impl Display for VariableType {
+impl Display for SpannedVariableType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.classification.to_string())
+        f.write_str(&self.var_type.to_string())
     }
 }
 
-impl VariableType {
+impl SpannedVariableType {
     pub fn from_variable_type_token(type_token: VariableTypeToken, span: Span) -> Self {
         Self {
             span,
-            classification: match type_token {
-                VariableTypeToken::IntType => VariableClassification::IntegerType,
-                VariableTypeToken::BooleanType => VariableClassification::BooleanType,
+            var_type: match type_token {
+                VariableTypeToken::IntType => VariableType::IntegerType,
+                VariableTypeToken::BooleanType => VariableType::BooleanType,
             },
         }
     }
 
     pub fn size(&self) -> MemoryUnits {
-        self.classification.size()
+        self.var_type.size()
     }
 }
 
@@ -100,7 +109,7 @@ pub struct Statement {
 pub enum StatementKind {
     Declaration {
         identifier: Identifier,
-        var_type: VariableType,
+        spanned_var_type: SpannedVariableType,
         value: Expression,
     },
     Return(Expression),
@@ -150,7 +159,7 @@ pub enum ExpressionKind {
         right: Box<Expression>,
     },
     Assignment {
-        target: AssignmentTarget,
+        identifier: Identifier,
         value: Box<Expression>,
     },
     Call {
@@ -163,15 +172,15 @@ pub enum ExpressionKind {
 #[derive(Debug, Clone)]
 pub struct FunctionParameter {
     pub identifier: Identifier,
-    pub var_type: VariableType,
+    pub spanned_var_type: SpannedVariableType,
     pub span: Span,
 }
 
 impl Display for FunctionParameter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let identifier = self.identifier.clone();
-        let var_type = self.var_type.clone();
-        write!(f, "{identifier}: {var_type}")
+        let spanned_var_type = self.spanned_var_type.clone();
+        write!(f, "{identifier}: {spanned_var_type}")
     }
 }
 
@@ -179,7 +188,7 @@ impl Display for FunctionParameter {
 pub struct FunctionDefinition {
     pub identifier: Identifier,
     pub parameters: Vec<FunctionParameter>,
-    pub return_type: VariableType,
+    pub return_type: SpannedVariableType,
     pub body: Block,
 }
 
@@ -195,11 +204,6 @@ pub struct Conditional {
 pub enum Else {
     Block(Block),
     If(Conditional),
-}
-
-#[derive(Clone, Debug)]
-pub enum AssignmentTarget {
-    Variable(Identifier),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -306,9 +310,9 @@ fn write_statement(
         StatementKind::Declaration {
             identifier: name,
             value,
-            var_type,
+            spanned_var_type,
         } => {
-            write!(formatter, "thoos {name}: {var_type} = ")?;
+            write!(formatter, "thoos {name}: {spanned_var_type} = ")?;
             write_expression(formatter, value, depth)?;
             formatter.write_str(";")
         }
@@ -422,11 +426,9 @@ fn write_expression(
             write_expression(formatter, right, depth)?;
             formatter.write_str(")")
         }
-        ExpressionKind::Assignment { target, value } => {
+        ExpressionKind::Assignment { identifier, value } => {
             formatter.write_str("(")?;
-            match target {
-                AssignmentTarget::Variable(name) => write!(formatter, "{name}")?,
-            }
+            write!(formatter, "{identifier}")?;
             formatter.write_str(" = ")?;
             write_expression(formatter, value, depth)?;
             formatter.write_str(")")
