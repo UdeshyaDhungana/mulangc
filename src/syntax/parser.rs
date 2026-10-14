@@ -245,7 +245,7 @@ impl Parser<'_> {
     fn parse_expression_statement(&mut self) -> Result<Statement, Diagnostic> {
         let expression = self.parse_expression(Precedence::Lowest)?;
         let semicolon_span = self.expect(Semicolon)?;
-        let span = expression.span.clone().joined_with(semicolon_span);
+        let span = expression.span.joined_with(semicolon_span);
         Ok(Statement {
             kind: StatementKind::Expression(expression),
             span,
