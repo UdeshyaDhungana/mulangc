@@ -138,14 +138,14 @@ impl Scope {
     fn add_function_identifier(
         &mut self,
         identifier: &Identifier,
-        fn_parameters_types: &Vec<SpannedDataType>,
+        fn_parameters_types: &[SpannedDataType],
         return_type: &SpannedDataType,
     ) {
         self.sym_table.insert(
             identifier.name.clone(),
             SymbolAttribute::Function(FunctionSymbolAttribute {
                 identifier: identifier.clone(),
-                param_types: fn_parameters_types.clone(),
+                param_types: fn_parameters_types.to_vec(),
                 return_type: return_type.clone(),
             }),
         );
@@ -161,6 +161,12 @@ pub struct Sema {
     analysis: Analysis,
     diagnostics: Vec<Diagnostic>,
     lookahead_function_attrs: Vec<FunctionSymbolAttribute>,
+}
+
+impl Default for Sema {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Sema {
@@ -249,7 +255,7 @@ impl Sema {
     fn record_function_definition(
         &mut self,
         identifier: &Identifier,
-        parameters: &Vec<FunctionParameter>,
+        parameters: &[FunctionParameter],
         return_type: &SpannedDataType,
     ) {
         self.must_get_current_scope_mut().add_function_identifier(
@@ -257,7 +263,7 @@ impl Sema {
             &parameters
                 .iter()
                 .map(|p| p.spanned_data_type.clone())
-                .collect(),
+                .collect::<Vec<_>>(),
             return_type,
         );
 
@@ -411,7 +417,7 @@ impl Sema {
                     ));
                 }
 
-                if !expr_type.is_convertible_to(&specified_type) {
+                if !expr_type.is_convertible_to(specified_type) {
                     return Err(Diagnostic::error(
                         identifier.span,
                         format!(

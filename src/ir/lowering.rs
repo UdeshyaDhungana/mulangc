@@ -65,13 +65,13 @@ impl Lowerer {
         let parameters = &fn_defn.parameters;
         let node_id = &fn_defn.identifier.node_id;
         let frame_size = self.frame_size_for_function(node_id);
-        let params_sizes = &parameters
+        let params_sizes: Vec<_> = parameters
             .iter()
             .map(|p| p.spanned_data_type.size())
             .collect();
 
         let mut new_fn_block =
-            IRFunctionBlock::new(&fn_defn.identifier.node_id, frame_size, params_sizes);
+            IRFunctionBlock::new(&fn_defn.identifier.node_id, frame_size, &params_sizes);
         new_fn_block.push_instruction(Instruction::FunctionDefinition(FnDefnSpec {
             node_id: node_id.clone(),
             frame_size,
@@ -333,7 +333,7 @@ impl Lowerer {
                     self.append_instruction(Instruction::Label(early_exit_label.clone()));
                     self.append_instruction(Instruction::Move(MovSpec {
                         src_reg: left_reg,
-                        dst_reg: dst_reg,
+                        dst_reg,
                     }));
                     self.append_instruction(Instruction::Goto(end_label.clone()));
 
@@ -341,7 +341,7 @@ impl Lowerer {
                     self.append_instruction(Instruction::Label(late_exit_label.clone()));
                     let right_reg = self.lower_expression(*right);
                     self.append_instruction(Instruction::Move(MovSpec {
-                        dst_reg: dst_reg,
+                        dst_reg,
                         src_reg: right_reg,
                     }));
                     self.append_instruction(Instruction::Label(end_label.clone()));
@@ -440,7 +440,7 @@ impl Lowerer {
         node_id: &String,
     ) -> (RegisterNumber, MemoryUnits) {
         let (variable_frame_depth, offset_from_frame_base) = {
-            let location = self.analysis.must_get_variable_layout(&node_id);
+            let location = self.analysis.must_get_variable_layout(node_id);
             (
                 location.parent_frame_depth,
                 location.offset_from_parent_frame_base,

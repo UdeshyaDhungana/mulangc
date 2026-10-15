@@ -136,13 +136,13 @@ impl IRFunctionBlock {
     pub fn new(
         defn_node_id: &NodeId,
         frame_size: MemoryUnits,
-        argc_sizes: &Vec<MemoryUnits>,
+        argc_sizes: &[MemoryUnits],
     ) -> Self {
         // 1 memory slot is reserved for the static link
         IRFunctionBlock {
             id: defn_node_id.clone(),
-            frame_size: frame_size,
-            argc_sizes: argc_sizes.clone(),
+            frame_size,
+            argc_sizes: argc_sizes.to_vec(),
 
             // Reserve first register for static link
             next_reg_num: 1 + argc_sizes.iter().sum::<MemoryUnits>(),
