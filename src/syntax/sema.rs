@@ -8,8 +8,8 @@ use crate::{
         Statement,
         StatementKind::{self},
         ast::{
-            SpannedVariableType,
-            VariableType::{self, BooleanType, IntegerType, VoidType},
+            DataType::{self, IntegerType, VoidType},
+            FunctionParameter, NodeId, SpannedDataType,
         },
     },
 };
@@ -17,140 +17,49 @@ use crate::{
 pub type MemoryUnits = usize;
 
 pub const MAIN_FUNCTION_NODE_ID: &str = "_main";
-pub const __DEBUG_BOL_FUNCTION_NODE_ID: &str = "__debug_bol";
-pub const __DEBUG_BOL_BOOL_FUNCTION_NODE_ID: &str = "__debug_bolbool";
 
-// Scope's symbol info
-struct FunctionSymbolInfo {
-    identifier: Identifier,
-    parameters_types: Vec<SpannedVariableType>,
-    return_type: SpannedVariableType,
-}
+/********* ANALYSIS ********* */
 
-struct VariableSymbolInfo {
-    identifier: Identifier,
-    var_type: SpannedVariableType,
-}
-
-impl VariableSymbolInfo {
-    fn get_classification(&self) -> VariableType {
-        self.var_type.var_type.clone()
-    }
-}
-
-enum SymbolInfo {
-    Function(FunctionSymbolInfo),
-    Variable(VariableSymbolInfo),
+#[derive(Debug)]
+pub struct VariableLayout {
+    pub parent_frame_depth: usize,
+    pub offset_from_parent_frame_base: MemoryUnits,
+    pub data_type: SpannedDataType,
 }
 
 #[derive(Debug)]
-enum ScopeType {
-    Function {
-        node_id: String,
-        memory_units_consumed: MemoryUnits,
-        return_type_classification: VariableType,
-    },
-    Block,
-}
-
-struct Scope {
-    pub symbol_table: HashMap<String, SymbolInfo>,
-    scope_type: ScopeType,
-}
-
-impl Scope {
-    fn new(scope_type: ScopeType) -> Self {
-        Self {
-            symbol_table: HashMap::new(),
-            scope_type,
-        }
-    }
-
-    fn add_variable_identifier(&mut self, identifier: &Identifier, var_type: SpannedVariableType) {
-        self.symbol_table.insert(
-            identifier.name.clone(),
-            SymbolInfo::Variable(VariableSymbolInfo {
-                identifier: identifier.clone(),
-                var_type,
-            }),
-        );
-    }
-
-    fn add_function_identifier(
-        &mut self,
-        identifier: &Identifier,
-        fn_parameters_types: Vec<SpannedVariableType>,
-        return_type: SpannedVariableType,
-    ) {
-        self.symbol_table.insert(
-            identifier.name.clone(),
-            SymbolInfo::Function(FunctionSymbolInfo {
-                identifier: identifier.clone(),
-                parameters_types: fn_parameters_types.clone(),
-                return_type,
-            }),
-        );
-    }
-
-    fn contains_identifier(&self, identifier_name: String) -> bool {
-        self.symbol_table.contains_key(&identifier_name)
-    }
-}
-
-#[derive(Default)]
-pub struct Counter {
-    count: usize,
-}
-
-impl Counter {
-    pub fn advance(&mut self) -> usize {
-        self.count += 1;
-        self.count - 1
-    }
-}
-
-#[derive(Debug)]
-pub struct VariableAttributes {
-    pub frame_depth: usize,
-    pub offset_from_frame_base: MemoryUnits,
-    pub var_type: SpannedVariableType,
-}
-
-#[derive(Debug)]
-pub struct FunctionAttributes {
+pub struct FunctionLayout {
     // Depth of the frame the function is defined in, not of its own frame
-    pub definition_depth: usize,
-    pub memory_units_consumed: MemoryUnits,
+    pub parent_frame_depth: usize,
+    pub locals_occupied_stack_size: MemoryUnits,
 }
 
+// Layout describes where a particular variable or function sits
+// These information should be enough to determine the starting point
+// and ending point of a function/variable in the memory
 #[derive(Debug)]
-pub enum IdentifierAttributes {
-    Variable(VariableAttributes),
-    Function(FunctionAttributes),
+pub enum IdentifierLayout {
+    Variable(VariableLayout),
+    Function(FunctionLayout),
 }
 
 #[derive(Debug, Default)]
 pub struct Analysis {
-    pub use_site_node_id_resolution_map: HashMap<String, String>,
-    pub node_id_attributes: HashMap<String, IdentifierAttributes>,
+    pub node_id_resolution_map: HashMap<NodeId, NodeId>,
+    pub node_id_layout: HashMap<NodeId, IdentifierLayout>,
 }
 
 impl Analysis {
-    pub fn must_get_variable_attributes_from_node_id(&self, node_id: &str) -> &VariableAttributes {
-        let Some(IdentifierAttributes::Variable(location)) = self.node_id_attributes.get(node_id)
-        else {
+    pub fn must_get_variable_layout(&self, node_id: &NodeId) -> &VariableLayout {
+        let Some(IdentifierLayout::Variable(location)) = self.node_id_layout.get(node_id) else {
             panic!("Variable with node id {node_id} not found");
         };
 
         location
     }
 
-    pub fn must_get_function_attributes_from_node_id(
-        &mut self,
-        node_id: &str,
-    ) -> &mut FunctionAttributes {
-        let Some(IdentifierAttributes::Function(location)) =
-            self.node_id_attributes.get_mut(node_id)
+    pub fn must_get_function_layout(&mut self, node_id: &NodeId) -> &mut FunctionLayout {
+        let Some(IdentifierLayout::Function(location)) = self.node_id_layout.get_mut(node_id)
         else {
             panic!("Function with node id {node_id} not found");
         };
@@ -158,50 +67,119 @@ impl Analysis {
         location
     }
 
-    pub fn resolve(&self, user_node_id: &String) -> String {
-        self.use_site_node_id_resolution_map
+    pub fn must_resolve(&self, user_node_id: &NodeId) -> &NodeId {
+        self.node_id_resolution_map
             .get(user_node_id)
             .expect("Caller node id must have been resolved")
-            .clone()
     }
 }
 
-struct LookaheadFunctionDefinition {
+/******* Scope and symbol table ****** */
+#[derive(Clone)]
+struct FunctionSymbolAttribute {
     identifier: Identifier,
-    parameter_types: Vec<SpannedVariableType>,
-    return_type: SpannedVariableType,
+    param_types: Vec<SpannedDataType>,
+    return_type: SpannedDataType,
+}
+
+#[derive(Clone)]
+struct VariableSymbolAttribute {
+    identifier: Identifier,
+    data_type: SpannedDataType,
+}
+
+impl VariableSymbolAttribute {
+    fn get_data_type(&self) -> &DataType {
+        &self.data_type.data_type
+    }
+}
+
+#[derive(Clone)]
+enum SymbolAttribute {
+    Function(FunctionSymbolAttribute),
+    Variable(VariableSymbolAttribute),
+}
+
+#[derive(Debug)]
+enum ScopeType {
+    Function {
+        node_id: NodeId,
+        locals_occupied_stack_size: MemoryUnits,
+        return_type: DataType,
+    },
+    Block,
+}
+
+struct Scope {
+    // Symbol table for a given scope
+    // maps the identifier name to its attributes
+    pub sym_table: HashMap<String, SymbolAttribute>,
+    scope_type: ScopeType,
+}
+
+impl Scope {
+    fn new(scope_type: ScopeType) -> Self {
+        Self {
+            sym_table: HashMap::new(),
+            scope_type,
+        }
+    }
+
+    fn add_variable_identifier(&mut self, identifier: &Identifier, data_type: &SpannedDataType) {
+        self.sym_table.insert(
+            identifier.name.clone(),
+            SymbolAttribute::Variable(VariableSymbolAttribute {
+                identifier: identifier.clone(),
+                data_type: data_type.clone(),
+            }),
+        );
+    }
+
+    fn add_function_identifier(
+        &mut self,
+        identifier: &Identifier,
+        fn_parameters_types: &Vec<SpannedDataType>,
+        return_type: &SpannedDataType,
+    ) {
+        self.sym_table.insert(
+            identifier.name.clone(),
+            SymbolAttribute::Function(FunctionSymbolAttribute {
+                identifier: identifier.clone(),
+                param_types: fn_parameters_types.clone(),
+                return_type: return_type.clone(),
+            }),
+        );
+    }
+
+    fn contains_identifier(&self, identifier_name: &String) -> bool {
+        self.sym_table.contains_key(identifier_name)
+    }
 }
 
 pub struct Sema {
     scopes_stack: Vec<Scope>,
     analysis: Analysis,
     diagnostics: Vec<Diagnostic>,
-    lookahead_function_definitions: Vec<LookaheadFunctionDefinition>,
-}
-
-impl Default for Sema {
-    fn default() -> Self {
-        Self::new()
-    }
+    lookahead_function_attrs: Vec<FunctionSymbolAttribute>,
 }
 
 impl Sema {
     pub fn new() -> Self {
         Self {
             scopes_stack: Vec::new(),
-            lookahead_function_definitions: Vec::new(),
+            lookahead_function_attrs: Vec::new(),
             analysis: Default::default(),
             diagnostics: Vec::new(),
         }
     }
 
-    fn get_current_scope(&mut self) -> &mut Scope {
+    fn must_get_current_scope_mut(&mut self) -> &mut Scope {
         self.scopes_stack
             .last_mut()
             .expect("At least one scope must exist during semantic analysis")
     }
 
-    fn get_current_frame(&mut self) -> &mut Scope {
+    fn must_get_current_frame_mut(&mut self) -> &mut Scope {
         self.scopes_stack
             .iter_mut()
             .rfind(|scope| matches!(scope.scope_type, ScopeType::Function { .. }))
@@ -216,53 +194,87 @@ impl Sema {
             - 1
     }
 
-    fn lookup_syminfo_for_identifier(&self, identifier_name: String) -> Option<&SymbolInfo> {
+    fn lookup_symattr_in_scope_stack(
+        &self,
+        identifier: &Identifier,
+    ) -> Result<&SymbolAttribute, Diagnostic> {
         for stack in self.scopes_stack.iter().rev() {
-            if let Some(symbol_info) = stack.symbol_table.get(&identifier_name.clone()) {
-                return Some(symbol_info);
+            if let Some(symbol_info) = stack.sym_table.get(&identifier.name) {
+                return Ok(symbol_info);
             } else {
                 continue;
             }
         }
-        None
+        Err(Diagnostic::error(
+            identifier.span,
+            format!(
+                "SEMA:: Usage of undefined identifier {}",
+                identifier.name
+            ),
+        ))
     }
 
-    // node_id means the node id of the function identifier
-    fn record_frame_location_in_analysis(&mut self, node_id: String, definition_depth: usize) {
-        self.analysis.node_id_attributes.insert(
-            node_id,
-            IdentifierAttributes::Function(FunctionAttributes {
-                definition_depth,
-                // Counted once the function scope is popped
-                memory_units_consumed: 0,
-            }),
-        );
-    }
-
-    fn allocate_slot_for_variable_in_current_frame(
+    // Adds the given variable (identifier + data type) to the current scope, adjusts the current
+    // frame size, and records the variable layout in analysis
+    fn record_variable_definition(
         &mut self,
         identifier: &Identifier,
-        var_type: SpannedVariableType,
+        spanned_data_type: &SpannedDataType,
     ) {
-        let depth = self.get_current_frame_depth();
-        let enclosing_frame = self.get_current_frame();
+        self.must_get_current_scope_mut()
+            .add_variable_identifier(identifier, spanned_data_type);
+
+        let enclosing_frame = self.must_get_current_frame_mut();
         let ScopeType::Function {
-            memory_units_consumed,
+            locals_occupied_stack_size,
             ..
         } = &mut enclosing_frame.scope_type
         else {
             panic!("Enclosing frame must be a function scope")
         };
-        let previously_consumed = *memory_units_consumed;
-        *memory_units_consumed += var_type.size();
-        self.analysis.node_id_attributes.insert(
+        let previously_occupied = *locals_occupied_stack_size;
+        *locals_occupied_stack_size += spanned_data_type.size();
+
+        let depth = self.get_current_frame_depth();
+        self.analysis.node_id_layout.insert(
             identifier.node_id.clone(),
-            IdentifierAttributes::Variable(VariableAttributes {
-                frame_depth: depth,
-                offset_from_frame_base: previously_consumed,
-                var_type,
+            IdentifierLayout::Variable(VariableLayout {
+                parent_frame_depth: depth,
+                offset_from_parent_frame_base: previously_occupied,
+                data_type: spanned_data_type.clone(),
             }),
         );
+    }
+
+    fn record_function_definition(
+        &mut self,
+        identifier: &Identifier,
+        parameters: &Vec<FunctionParameter>,
+        return_type: &SpannedDataType,
+    ) {
+        self.must_get_current_scope_mut().add_function_identifier(
+            identifier,
+            &parameters
+                .iter()
+                .map(|p| p.spanned_data_type.clone())
+                .collect(),
+            return_type,
+        );
+
+        self.analysis.node_id_layout.insert(
+            identifier.node_id.clone(),
+            IdentifierLayout::Function(FunctionLayout {
+                parent_frame_depth: self.get_current_frame_depth(),
+                // Counted once the function scope is popped
+                locals_occupied_stack_size: 0,
+            }),
+        );
+    }
+
+    fn record_resolution(&mut self, usage_node_id: &NodeId, defn_node_id: &NodeId) {
+        self.analysis
+            .node_id_resolution_map
+            .insert(usage_node_id.clone(), defn_node_id.clone());
     }
 
     fn push_scope(&mut self, scope: Scope) {
@@ -270,73 +282,40 @@ impl Sema {
     }
 
     fn pop_scope(&mut self) {
-        let scope = self
+        let popped_scope = self
             .scopes_stack
             .pop()
             .expect("A scope must exist to be popped");
 
         let ScopeType::Function {
-            node_id: frame_id,
-            memory_units_consumed: variable_slot_count,
+            node_id,
+            locals_occupied_stack_size,
             ..
-        } = scope.scope_type
+        } = popped_scope.scope_type
         else {
             return;
         };
 
-        let popped_fn_attributes = self
-            .analysis
-            .must_get_function_attributes_from_node_id(&frame_id);
-        popped_fn_attributes.memory_units_consumed = variable_slot_count;
-    }
-
-    fn add_debug_builtins(&mut self) {
-        // DEBUG: Just add `bol` builtin so analyzer won't complain
-        self.get_current_scope().add_function_identifier(
-            &Identifier {
-                name: String::from("bol"),
-                node_id: String::from(__DEBUG_BOL_FUNCTION_NODE_ID),
-                span: Span::new(0, 0),
-            },
-            vec![SpannedVariableType {
-                span: Span::new(0, 0),
-                var_type: IntegerType,
-            }],
-            SpannedVariableType {
-                span: Span::new(0, 0),
-                var_type: VariableType::VoidType,
-            },
-        );
-        self.record_frame_location_in_analysis(String::from(__DEBUG_BOL_FUNCTION_NODE_ID), 0);
-
-        // Add bol for bool type as well
-        self.get_current_scope().add_function_identifier(
-            &Identifier {
-                name: String::from("bolbool"),
-                node_id: String::from(__DEBUG_BOL_BOOL_FUNCTION_NODE_ID),
-                span: Span::new(0, 0),
-            },
-            vec![SpannedVariableType {
-                span: Span::new(0, 0),
-                var_type: BooleanType,
-            }],
-            SpannedVariableType {
-                span: Span::new(0, 0),
-                var_type: VariableType::VoidType,
-            },
-        );
-        self.record_frame_location_in_analysis(String::from(__DEBUG_BOL_BOOL_FUNCTION_NODE_ID), 0);
+        let fn_layout_from_analysis = self.analysis.must_get_function_layout(&node_id);
+        fn_layout_from_analysis.locals_occupied_stack_size = locals_occupied_stack_size;
     }
 
     pub fn analyse(mut self, ast: &AST) -> Result<Analysis, Vec<Diagnostic>> {
-        self.record_frame_location_in_analysis(String::from(MAIN_FUNCTION_NODE_ID), 0);
+        // Manually instead of record_function_definition
+        // because no scopes are setup at entry point
+        let main_fn_node_id = String::from(MAIN_FUNCTION_NODE_ID);
         self.push_scope(Scope::new(ScopeType::Function {
-            node_id: String::from(MAIN_FUNCTION_NODE_ID),
-            memory_units_consumed: 0,
-            return_type_classification: VariableType::IntegerType,
+            node_id: main_fn_node_id.clone(),
+            locals_occupied_stack_size: 0,
+            return_type: DataType::IntegerType,
         }));
-
-        self.add_debug_builtins();
+        self.analysis.node_id_layout.insert(
+            main_fn_node_id,
+            IdentifierLayout::Function(FunctionLayout {
+                parent_frame_depth: 0,
+                locals_occupied_stack_size: 0,
+            }),
+        );
 
         // Pass 1
         // Process functions signatures first, so functions can be used before their definitions are set in
@@ -351,11 +330,9 @@ impl Sema {
                 let function_name = identifier.name.clone();
 
                 if self
-                    .lookahead_function_definitions
+                    .lookahead_function_attrs
                     .iter()
-                    .any(|pending_function_definition| {
-                        pending_function_definition.identifier.name == identifier.name
-                    })
+                    .any(|defn| defn.identifier.name == identifier.name)
                 {
                     self.diagnostics.push(Diagnostic::error(
                         identifier.span,
@@ -364,21 +341,21 @@ impl Sema {
                     continue;
                 }
 
-                self.lookahead_function_definitions
-                    .push(LookaheadFunctionDefinition {
-                        identifier: identifier.clone(),
-                        parameter_types: parameters
-                            .iter()
-                            .map(|p| p.spanned_var_type.clone())
-                            .collect(),
-                        return_type: return_type.clone(),
-                    })
+                self.lookahead_function_attrs.push(FunctionSymbolAttribute {
+                    identifier: identifier.clone(),
+                    param_types: parameters
+                        .iter()
+                        .map(|p| p.spanned_data_type.clone())
+                        .collect(),
+                    return_type: return_type.clone(),
+                })
             }
         }
 
         // Pass 2
         // Process the rest of the statements
         self.analyse_statements_collecting_diagnostics(&ast.block.statements);
+
         self.pop_scope();
 
         if self.diagnostics.is_empty() {
@@ -410,14 +387,14 @@ impl Sema {
             StatementKind::Declaration {
                 identifier,
                 value,
-                spanned_var_type,
+                spanned_data_type,
             } => {
                 let expr_type = self.analyse_expression(value)?;
                 let identifier_name = identifier.name.clone();
 
                 if self
-                    .get_current_scope()
-                    .contains_identifier(identifier.name.clone())
+                    .must_get_current_scope_mut()
+                    .contains_identifier(&identifier_name)
                 {
                     return Err(Diagnostic::error(
                         identifier.span,
@@ -425,30 +402,25 @@ impl Sema {
                     ));
                 }
 
-                let var_type_classification = spanned_var_type.var_type.clone();
+                let specified_type = &spanned_data_type.data_type;
 
-                if var_type_classification == VoidType {
+                if *specified_type == VoidType {
                     return Err(Diagnostic::error(
                         identifier.span,
                         "SEMA:: `void` is not assignable".to_string(),
                     ));
                 }
 
-                if !expr_type.is_convertible_to(&spanned_var_type.var_type) {
+                if !expr_type.is_convertible_to(&specified_type) {
                     return Err(Diagnostic::error(
                         identifier.span,
                         format!(
-                            "SEMA:: Cannot assign {expr_type} to a variable of type {var_type_classification}"
+                            "SEMA:: Cannot assign {expr_type} to a variable of type {specified_type}"
                         ),
                     ));
                 }
 
-                self.get_current_scope()
-                    .add_variable_identifier(identifier, spanned_var_type.clone());
-                self.allocate_slot_for_variable_in_current_frame(
-                    identifier,
-                    spanned_var_type.clone(),
-                );
+                self.record_variable_definition(identifier, spanned_data_type);
                 Ok(())
             }
             StatementKind::Return(expression) => {
@@ -459,22 +431,23 @@ impl Sema {
                     ));
                 }
 
-                let expr_classficiation = self.analyse_expression(expression)?;
-                let enclosing_function_scope = self.get_current_frame();
+                let expr_data_type = self.analyse_expression(expression)?;
+                let enclosing_frame = self.must_get_current_frame_mut();
+
                 let ScopeType::Function {
-                    return_type_classification,
+                    return_type: return_type_classification,
                     ..
-                } = &enclosing_function_scope.scope_type
+                } = &enclosing_frame.scope_type
                 else {
                     panic!("Enclosing function scope must be a function scope");
                 };
 
-                if *return_type_classification != expr_classficiation {
+                if *return_type_classification != expr_data_type {
                     return Err(Diagnostic::error(
                         expression.span,
                         format!(
                             "Expected return type to be {}, got {}",
-                            return_type_classification, expr_classficiation,
+                            return_type_classification, expr_data_type,
                         ),
                     ));
                 }
@@ -487,11 +460,11 @@ impl Sema {
                 return_type,
                 ..
             }) => {
-                let function_name = identifier.name.clone();
+                let function_name = &identifier.name;
 
                 if self
-                    .get_current_scope()
-                    .contains_identifier(function_name.clone())
+                    .must_get_current_scope_mut()
+                    .contains_identifier(function_name)
                 {
                     return Err(Diagnostic::error(
                         identifier.span,
@@ -499,54 +472,33 @@ impl Sema {
                     ));
                 }
 
-                self.get_current_scope().add_function_identifier(
-                    identifier,
-                    parameters
-                        .iter()
-                        .map(|p| p.spanned_var_type.clone())
-                        .collect(),
-                    return_type.clone(),
-                );
-
-                // We should allow recursive calls, so register early
-                self.record_frame_location_in_analysis(
-                    identifier.node_id.clone(),
-                    self.get_current_frame_depth(),
-                );
+                self.record_function_definition(identifier, parameters, return_type);
 
                 self.push_scope(Scope::new(ScopeType::Function {
                     node_id: identifier.node_id.clone(),
-                    memory_units_consumed: 0,
-                    return_type_classification: return_type.var_type.clone(),
+                    locals_occupied_stack_size: 0,
+                    return_type: return_type.data_type.clone(),
                 }));
-                for parameter in parameters {
-                    let parameter_name = parameter.identifier.name.clone();
-                    let param_type = parameter.spanned_var_type.clone();
+
+                for param in parameters {
+                    let param_identifier = &param.identifier;
+                    let param_type = &param.spanned_data_type;
                     // Each parameter identifier must be unique
                     if self
-                        .get_current_scope()
-                        .contains_identifier(parameter_name.clone())
+                        .must_get_current_scope_mut()
+                        .contains_identifier(&param_identifier.name)
                     {
                         return Err(Diagnostic::error(
-                            parameter.span,
-                            format!("SEMA:: Identifier {parameter_name} has already been declared"),
+                            param.span,
+                            format!(
+                                "SEMA:: Identifier {param_identifier} has already been declared",
+                            ),
                         ));
                     }
-                    self.get_current_scope()
-                        .add_variable_identifier(&parameter.identifier, param_type.clone());
-                    self.allocate_slot_for_variable_in_current_frame(
-                        &parameter.identifier,
-                        param_type,
-                    );
+
+                    self.record_variable_definition(param_identifier, param_type);
                 }
-                self.get_current_scope().add_function_identifier(
-                    identifier,
-                    parameters
-                        .iter()
-                        .map(|t| t.spanned_var_type.clone())
-                        .collect(),
-                    return_type.clone(),
-                );
+
                 self.analyse_statements_collecting_diagnostics(&body.statements);
 
                 // If a function has a non-void return type
@@ -555,7 +507,7 @@ impl Sema {
                 // Type checking is not needed here since it's captured in the
                 // analysis of each return statement
                 if !self.does_block_definitely_return(body)
-                    && return_type.var_type != VariableType::VoidType
+                    && return_type.data_type != DataType::VoidType
                 {
                     // C style error diagnostic
                     let body_end_span = body.span.end;
@@ -564,6 +516,7 @@ impl Sema {
                         "non-void function does not return a value in all control paths",
                     ));
                 }
+
                 self.pop_scope();
                 Ok(())
             }
@@ -584,6 +537,7 @@ impl Sema {
             } => {
                 // For's parenthesis get their own scope
                 self.push_scope(Scope::new(ScopeType::Block));
+
                 if let Some(initializer) = initialiser {
                     self.analyse_statement(initializer)?;
                 }
@@ -600,32 +554,23 @@ impl Sema {
         }
     }
 
-    fn analyse_expression(&mut self, expression: &Expression) -> Result<VariableType, Diagnostic> {
+    fn analyse_expression(&mut self, expression: &Expression) -> Result<DataType, Diagnostic> {
         match &expression.kind {
             ExpressionKind::Identifier(identifier) => {
-                let Some(symbol_info) = self.lookup_syminfo_for_identifier(identifier.name.clone())
-                else {
-                    return Err(Diagnostic::error(
-                        expression.span,
-                        format!("SEMA:: Usage of undefined identifier {identifier}"),
-                    ));
-                };
+                let symattr = self.lookup_symattr_in_scope_stack(identifier)?.clone();
 
-                match symbol_info {
-                    SymbolInfo::Function(..) => {
-                        let identifier_name = identifier.name.clone();
-                        Err(Diagnostic::error(
-                            expression.span,
-                            format!("Identifier {identifier_name} is a `dhanda`, not a `variable`"),
-                        ))
-                    }
-                    SymbolInfo::Variable(var_symbol_info) => {
-                        let declaration_node_id = var_symbol_info.identifier.node_id.clone();
-                        let declaration_classification = var_symbol_info.get_classification();
-                        self.analysis
-                            .use_site_node_id_resolution_map
-                            .insert(identifier.node_id.clone(), declaration_node_id);
-                        Ok(declaration_classification)
+                match symattr {
+                    SymbolAttribute::Function(..) => Err(Diagnostic::error(
+                        expression.span,
+                        format!("Identifier {identifier} is a `dhanda`, not a `variable`"),
+                    )),
+                    SymbolAttribute::Variable(var_symbol_info) => {
+                        let definition_datatype = var_symbol_info.get_data_type().clone();
+                        self.record_resolution(
+                            &identifier.node_id,
+                            &var_symbol_info.identifier.node_id,
+                        );
+                        Ok(definition_datatype.clone())
                     }
                 }
             }
@@ -640,85 +585,87 @@ impl Sema {
                 Ok(left_type)
             }
             ExpressionKind::Assignment { identifier, value } => {
-                let expr_classification = self.analyse_expression(value)?;
-                let Some(symbol_info) = self.lookup_syminfo_for_identifier(identifier.name.clone())
-                else {
-                    return Err(Diagnostic::error(
-                        identifier.span,
-                        format!("SEMA:: Usage of undefined identifier {}", identifier.name),
-                    ));
-                };
-                let variable_name = identifier.name.clone();
-                match symbol_info {
-                    SymbolInfo::Function(..) => {
+                let expr_type = self.analyse_expression(value)?;
+                let symattr = self.lookup_symattr_in_scope_stack(identifier)?;
+                match symattr {
+                    SymbolAttribute::Function(..) => {
                         return Err(Diagnostic::error(
                             identifier.span,
-                            format!("Cannot assign to {variable_name} of `dhanda` type"),
+                            format!("Cannot assign to {identifier} of `dhanda` type"),
                         ));
                     }
-                    SymbolInfo::Variable(variable_sym_info) => {
-                        let resolved_identifier = variable_sym_info.identifier.clone();
-                        let target_type = variable_sym_info.var_type.clone();
+                    SymbolAttribute::Variable(var_symattr) => {
+                        let defn_identifier = var_symattr.identifier.clone();
+                        let defn_datatype = var_symattr.data_type.clone();
 
-                        if variable_sym_info.var_type.var_type != expr_classification {
+                        if var_symattr.data_type.data_type != expr_type {
                             return Err(Diagnostic::error(
-                                resolved_identifier.span,
+                                defn_identifier.span,
                                 format!(
-                                    "Cannot assign expression of type {expr_classification} to variable {resolved_identifier} of type {target_type}"
+                                    "Cannot assign expression of type {expr_type} to variable {defn_identifier} of type {defn_datatype}"
                                 ),
                             ));
                         }
 
-                        self.analysis.use_site_node_id_resolution_map.insert(
-                            identifier.node_id.clone(),
-                            resolved_identifier.node_id.clone(),
-                        );
+                        self.record_resolution(&identifier.node_id, &defn_identifier.node_id);
                     }
                 }
-                Ok(expr_classification)
+                Ok(expr_type)
             }
             ExpressionKind::Call { callee, arguments } => {
-                let function_name = callee.name.clone();
-                let return_value_type: VariableType;
+                let fn_defn_sym_attr: Option<FunctionSymbolAttribute>;
 
-                // Scope stack takes priority over lookahead definitions
-                let (definition_node_id, param_types) =
-                    match self.lookup_syminfo_for_identifier(function_name.clone()) {
-                        Some(SymbolInfo::Variable(..)) => {
+                // Search for the function symbol attribute
+                // First, from the scope stack, and then from lookahead definitions
+                let mut sym_attr_from_scope_stack: Option<&SymbolAttribute> = None;
+                for stack in self.scopes_stack.iter().rev() {
+                    if let Some(sym_attr) = stack.sym_table.get(&callee.name) {
+                        sym_attr_from_scope_stack = Some(sym_attr);
+                        break;
+                    } else {
+                        continue;
+                    }
+                }
+
+                if let Some(sym_attr_from_scope_stack) = sym_attr_from_scope_stack {
+                    match sym_attr_from_scope_stack {
+                        SymbolAttribute::Variable(..) => {
                             return Err(Diagnostic::error(
-                                expression.span,
+                                callee.span,
                                 "SEMA:: Called object is not a function",
                             ));
                         }
-                        Some(SymbolInfo::Function(FunctionSymbolInfo {
-                            identifier,
-                            parameters_types,
-                            return_type,
-                        })) => {
-                            return_value_type = return_type.var_type.clone();
-                            (identifier.node_id.clone(), parameters_types.clone())
+                        SymbolAttribute::Function(fn_attr) => {
+                            fn_defn_sym_attr = Some(fn_attr.clone());
                         }
-                        // Not in scope yet, so it must be defined further down
-                        None => match self
-                            .lookahead_function_definitions
-                            .iter()
-                            .find(|fn_definition| fn_definition.identifier.name == function_name)
-                        {
-                            Some(fn_definition) => {
-                                return_value_type = fn_definition.return_type.var_type.clone();
-                                (
-                                    fn_definition.identifier.node_id.clone(),
-                                    fn_definition.parameter_types.clone(),
-                                )
-                            }
-                            None => {
-                                return Err(Diagnostic::error(
-                                    callee.span,
-                                    format!("SEMA:: Usage of undefined function {function_name}"),
-                                ));
-                            }
-                        },
-                    };
+                    }
+                } else {
+                    let fn_attr = self
+                        .lookahead_function_attrs
+                        .iter()
+                        .find(|fn_attr| fn_attr.identifier.name == callee.name);
+                    match fn_attr {
+                        Some(fn_attr) => {
+                            fn_defn_sym_attr = Some(fn_attr.clone());
+                        }
+                        None => {
+                            return Err(Diagnostic::error(
+                                callee.span,
+                                format!("SEMA:: Usage of undefined function {}", callee),
+                            ));
+                        }
+                    }
+                }
+
+                let Some(fn_defn_sym_attr) = fn_defn_sym_attr else {
+                    panic!("SEMA:: Should have been a Some() by now")
+                };
+
+                let FunctionSymbolAttribute {
+                    identifier,
+                    return_type,
+                    param_types,
+                } = fn_defn_sym_attr;
 
                 let fn_arity = param_types.len();
                 if fn_arity != arguments.len() {
@@ -731,16 +678,15 @@ impl Sema {
                     let error_pointer_span = expression.span.end - 1;
                     return Err(Diagnostic::error(
                         Span::new(error_pointer_span, error_pointer_span),
-                        format!("SEMA:: too {few_many} arguments in call to `{function_name}`"),
+                        format!("SEMA:: too {few_many} arguments in call to `{callee}`"),
                     ));
                 }
 
-                // Compare the types
                 for i in 0..fn_arity {
                     let arg = &arguments[i];
                     let arg_type = self.analyse_expression(arg)?;
                     let param_type = &param_types[i];
-                    if arg_type != param_type.var_type {
+                    if arg_type != param_type.data_type {
                         return Err(Diagnostic::error(
                             arg.span,
                             format!(
@@ -751,11 +697,9 @@ impl Sema {
                     }
                 }
 
-                self.analysis
-                    .use_site_node_id_resolution_map
-                    .insert(callee.node_id.clone(), definition_node_id);
+                self.record_resolution(&callee.node_id, &identifier.node_id);
 
-                Ok(return_value_type)
+                Ok(return_type.data_type.clone())
             }
         }
     }

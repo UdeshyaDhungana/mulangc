@@ -1,34 +1,34 @@
 use std::collections::HashMap;
 
 use crate::{
+    diagnostics::Span,
     ir::instructions::{
-        BinaryOpSpec, BinaryOperation, CallSpec, GoifSpec, IRFunction, IRProgram,
+        BinOpSpec, BinaryOperation, CallSpec, FnDefnSpec, GoifSpec, IRFunctionBlock, IRProgram,
         Instruction::{self, BinaryOp, LoadFrameAddress, LoadImmediate, StoreFromRegister},
-        LoadFrameAddressSpec, LoadImmediateSpec, LoadToRegisterSpec, MoveSpec, RegisterNumber,
-        ReturnSpec, StoreFromRegisterSpec, UnaryOpSpec, UnaryOperation,
+        LoadFrameAddrSpec, LoadImmSpec, LoadToRegSpec, MovSpec, RegisterNumber, ReturnSpec,
+        StrFromRegSpec, UnaryOp, UnaryOpSpec,
     },
     syntax::{
         AST,
         BinaryOperator::{self},
-        Block, Conditional, Else, Expression, ExpressionKind, Statement, StatementKind,
-        UnaryOperator,
-        sema::{
-            __DEBUG_BOL_BOOL_FUNCTION_NODE_ID, __DEBUG_BOL_FUNCTION_NODE_ID, Analysis, Counter,
-            FunctionAttributes, IdentifierAttributes, MAIN_FUNCTION_NODE_ID, MemoryUnits,
-        },
+        Block, Conditional, Else, Expression, ExpressionKind, FunctionDefinition, Identifier,
+        Statement, StatementKind, UnaryOperator,
+        ast::{DataType::IntegerType, SpannedDataType},
+        sema::{Analysis, FunctionLayout, IdentifierLayout, MAIN_FUNCTION_NODE_ID, MemoryUnits},
+        utils::Counter,
     },
 };
 
 // IR frame layout, in logical slots (see _ir_specs.md):
 //   slot 0                      static link
 //   slots 1 ..= variable_slot_count params, then locals
+const RESERVED_LOGICAL_SLOTS_BEFORE_LOCALS: MemoryUnits = 1;
 pub const STATIC_LINK_LOGICAL_OFFSET: MemoryUnits = 0;
-const RESERVED_SLOTS_BEFORE_LOCALS: MemoryUnits = 1;
 
 pub struct Lowerer {
     analysis: Analysis,
-    registered_functions: HashMap<String, IRFunction>,
-    current_function_stack: Vec<IRFunction>,
+    registered_functions: HashMap<String, IRFunctionBlock>,
+    current_function_stack: Vec<IRFunctionBlock>,
     counter: Counter,
 }
 
@@ -61,14 +61,24 @@ impl Lowerer {
         current_function.push_instruction(instruction);
     }
 
-    fn push_fn_to_frame_stack(
-        &mut self,
-        node_id: &str,
-        frame_size: MemoryUnits,
-        argc_sizes: Vec<MemoryUnits>,
-    ) {
-        let new_fn = IRFunction::new(node_id, frame_size, argc_sizes);
-        self.current_function_stack.push(new_fn);
+    fn push_fn_to_frame_stack(&mut self, fn_defn: &FunctionDefinition) {
+        let parameters = &fn_defn.parameters;
+        let node_id = &fn_defn.identifier.node_id;
+        let frame_size = self.frame_size_for_function(node_id);
+        let params_sizes = &parameters
+            .iter()
+            .map(|p| p.spanned_data_type.size())
+            .collect();
+
+        let mut new_fn_block =
+            IRFunctionBlock::new(&fn_defn.identifier.node_id, frame_size, params_sizes);
+        new_fn_block.push_instruction(Instruction::FunctionDefinition(FnDefnSpec {
+            node_id: node_id.clone(),
+            frame_size,
+            argc_sizes: params_sizes.clone(),
+        }));
+
+        self.current_function_stack.push(new_fn_block);
     }
 
     fn pop_fn_from_frame_stack(&mut self) {
@@ -81,40 +91,35 @@ impl Lowerer {
             .pop()
             .expect("At least one function must be present");
         self.registered_functions
-            .insert(ended_function.node_id(), ended_function);
-    }
-
-    pub fn register_builtins(&mut self) {
-        self.push_fn_to_frame_stack(
-            __DEBUG_BOL_FUNCTION_NODE_ID,
-            self.frame_size_for_function(__DEBUG_BOL_FUNCTION_NODE_ID),
-            vec![1],
-        );
-        self.pop_fn_from_frame_stack();
-
-        self.push_fn_to_frame_stack(
-            __DEBUG_BOL_BOOL_FUNCTION_NODE_ID,
-            self.frame_size_for_function(__DEBUG_BOL_BOOL_FUNCTION_NODE_ID),
-            vec![1],
-        );
-        self.pop_fn_from_frame_stack();
+            .insert(ended_function.id().clone(), ended_function);
     }
 
     pub fn lower(mut self, ast: AST) -> IRProgram {
-        self.register_builtins();
         // The program cannot take arguments from OS as of now
-        self.push_fn_to_frame_stack(
-            MAIN_FUNCTION_NODE_ID,
-            self.frame_size_for_function(MAIN_FUNCTION_NODE_ID),
-            vec![0],
-        );
+        // We'll remove this shenanigan once we make main function compulsory
+        // The same corollary goes for parser's parse wher we push the main
+        // function to the stack at the start of the program
+        self.push_fn_to_frame_stack(&FunctionDefinition {
+            identifier: Identifier {
+                name: String::from("main"),
+                node_id: String::from(MAIN_FUNCTION_NODE_ID),
+                span: Span::new(0, 0),
+            },
+            parameters: Vec::new(),
+            return_type: SpannedDataType {
+                data_type: IntegerType,
+                span: Span::new(0, 0),
+            },
+            body: Block {
+                statements: Vec::new(),
+                span: Span::new(0, 0),
+            },
+        });
+
         self.lower_block(ast.block);
 
         // return 0;
-        self.append_instruction(LoadImmediate(LoadImmediateSpec {
-            dst_reg: 0,
-            immediate: 0,
-        }));
+        self.append_instruction(LoadImmediate(LoadImmSpec { dst_reg: 0, imm: 0 }));
         self.append_instruction(Instruction::Return(ReturnSpec { src_reg: 0 }));
         self.pop_fn_from_frame_stack();
 
@@ -135,18 +140,17 @@ impl Lowerer {
                 let expr_reg = self.lower_expression(value);
 
                 let frame_address_reg = self.get_next_register();
-                self.append_instruction(LoadFrameAddress(LoadFrameAddressSpec {
+                self.append_instruction(LoadFrameAddress(LoadFrameAddrSpec {
                     dst_reg: frame_address_reg,
                 }));
 
-                let variable_location = self
-                    .analysis
-                    .must_get_variable_attributes_from_node_id(&identifier.node_id);
+                let variable_location = self.analysis.must_get_variable_layout(&identifier.node_id);
 
-                self.append_instruction(StoreFromRegister(StoreFromRegisterSpec {
+                self.append_instruction(StoreFromRegister(StrFromRegSpec {
                     src_reg: expr_reg,
                     dst_base_reg: frame_address_reg,
-                    offset: variable_location.offset_from_frame_base + RESERVED_SLOTS_BEFORE_LOCALS,
+                    offset: variable_location.offset_from_parent_frame_base
+                        + RESERVED_LOGICAL_SLOTS_BEFORE_LOCALS,
                 }));
             }
             StatementKind::Return(expression) => {
@@ -157,20 +161,13 @@ impl Lowerer {
                 self.lower_expression(expression);
             }
             StatementKind::Function(function_definition) => {
-                self.push_fn_to_frame_stack(
-                    &function_definition.identifier.node_id,
-                    self.frame_size_for_function(&function_definition.identifier.node_id),
-                    function_definition
-                        .parameters
-                        .iter()
-                        .map(|p| p.spanned_var_type.size())
-                        .collect(),
-                );
+                self.push_fn_to_frame_stack(&function_definition);
+
                 let frame_address_reg = self.get_next_register();
-                self.append_instruction(LoadFrameAddress(LoadFrameAddressSpec {
+                self.append_instruction(LoadFrameAddress(LoadFrameAddrSpec {
                     dst_reg: frame_address_reg,
                 }));
-                self.append_instruction(StoreFromRegister(StoreFromRegisterSpec {
+                self.append_instruction(StoreFromRegister(StrFromRegSpec {
                     src_reg: 0,
                     dst_base_reg: frame_address_reg,
                     offset: STATIC_LINK_LOGICAL_OFFSET,
@@ -179,12 +176,12 @@ impl Lowerer {
                 for (idx, parameter) in function_definition.parameters.iter().enumerate() {
                     let offset = self
                         .analysis
-                        .must_get_variable_attributes_from_node_id(&parameter.identifier.node_id)
-                        .offset_from_frame_base;
-                    self.append_instruction(StoreFromRegister(StoreFromRegisterSpec {
+                        .must_get_variable_layout(&parameter.identifier.node_id)
+                        .offset_from_parent_frame_base;
+                    self.append_instruction(StoreFromRegister(StrFromRegSpec {
                         src_reg: idx + 1,
                         dst_base_reg: frame_address_reg,
-                        offset: offset + RESERVED_SLOTS_BEFORE_LOCALS,
+                        offset: offset + RESERVED_LOGICAL_SLOTS_BEFORE_LOCALS,
                     }));
                 }
 
@@ -199,9 +196,9 @@ impl Lowerer {
                 // Implicit return 0
                 if !has_return {
                     let next_register = self.get_next_register();
-                    self.append_instruction(Instruction::LoadImmediate(LoadImmediateSpec {
+                    self.append_instruction(Instruction::LoadImmediate(LoadImmSpec {
                         dst_reg: next_register,
-                        immediate: 0,
+                        imm: 0,
                     }));
                     self.append_instruction(Instruction::Return(ReturnSpec {
                         src_reg: next_register,
@@ -272,11 +269,11 @@ impl Lowerer {
     fn lower_expression(&mut self, expression: Expression) -> RegisterNumber {
         match expression.kind {
             ExpressionKind::Identifier(identifier) => {
-                let resolved_node_id = self.analysis.resolve(&identifier.node_id);
+                let resolved_node_id = self.analysis.must_resolve(&identifier.node_id).clone();
                 let (frame_pointer_reg, offset) = self
-                    .get_frame_pointer_reg_and_logical_local_offset_for_node_id(resolved_node_id);
+                    .get_frame_pointer_reg_and_logical_local_offset_for_node_id(&resolved_node_id);
                 let dst_reg = self.get_next_register();
-                self.append_instruction(Instruction::LoadToRegister(LoadToRegisterSpec {
+                self.append_instruction(Instruction::LoadToRegister(LoadToRegSpec {
                     dst_reg,
                     src_base_reg: frame_pointer_reg,
                     offset,
@@ -286,9 +283,9 @@ impl Lowerer {
             // Integer lives in one register
             ExpressionKind::Integer(value) => {
                 let reg_num: RegisterNumber = self.get_next_register();
-                self.append_instruction(Instruction::LoadImmediate(LoadImmediateSpec {
+                self.append_instruction(Instruction::LoadImmediate(LoadImmSpec {
                     dst_reg: reg_num,
-                    immediate: value,
+                    imm: value,
                 }));
                 reg_num
             }
@@ -334,17 +331,17 @@ impl Lowerer {
 
                     // Early exit
                     self.append_instruction(Instruction::Label(early_exit_label.clone()));
-                    self.append_instruction(Instruction::Move(MoveSpec {
+                    self.append_instruction(Instruction::Move(MovSpec {
                         src_reg: left_reg,
-                        dst_reg,
+                        dst_reg: dst_reg,
                     }));
                     self.append_instruction(Instruction::Goto(end_label.clone()));
 
                     // Late exit
                     self.append_instruction(Instruction::Label(late_exit_label.clone()));
                     let right_reg = self.lower_expression(*right);
-                    self.append_instruction(Instruction::Move(MoveSpec {
-                        dst_reg,
+                    self.append_instruction(Instruction::Move(MovSpec {
+                        dst_reg: dst_reg,
                         src_reg: right_reg,
                     }));
                     self.append_instruction(Instruction::Label(end_label.clone()));
@@ -353,7 +350,7 @@ impl Lowerer {
 
                 let right_reg: RegisterNumber = self.lower_expression(*right);
 
-                self.append_instruction(BinaryOp(BinaryOpSpec {
+                self.append_instruction(BinaryOp(BinOpSpec {
                     dst_reg,
                     left_reg,
                     right_reg,
@@ -363,10 +360,10 @@ impl Lowerer {
             }
             ExpressionKind::Assignment { identifier, value } => {
                 let expression_reg: RegisterNumber = self.lower_expression(*value);
-                let resolved_node_id = self.analysis.resolve(&identifier.node_id);
+                let resolved_node_id = self.analysis.must_resolve(&identifier.node_id).clone();
                 let (frame_pointer_reg, offset) = self
-                    .get_frame_pointer_reg_and_logical_local_offset_for_node_id(resolved_node_id);
-                self.append_instruction(Instruction::StoreFromRegister(StoreFromRegisterSpec {
+                    .get_frame_pointer_reg_and_logical_local_offset_for_node_id(&resolved_node_id);
+                self.append_instruction(Instruction::StoreFromRegister(StrFromRegSpec {
                     src_reg: expression_reg,
                     dst_base_reg: frame_pointer_reg,
                     offset,
@@ -375,7 +372,7 @@ impl Lowerer {
             }
             ExpressionKind::Call { callee, arguments } => {
                 let frame_reg: RegisterNumber = self.get_next_register();
-                self.append_instruction(Instruction::LoadFrameAddress(LoadFrameAddressSpec {
+                self.append_instruction(Instruction::LoadFrameAddress(LoadFrameAddrSpec {
                     dst_reg: frame_reg,
                 }));
                 let mut arg_regs = Vec::new();
@@ -388,14 +385,14 @@ impl Lowerer {
 
                 // If I'm the parent, pass my frame address, else
                 // pass on whatever static link I was handed off
-                let resolved_node_id = self.analysis.resolve(&callee.node_id);
+                let resolved_node_id = self.analysis.must_resolve(&callee.node_id).clone();
                 let is_caller_parent = self.get_current_frame_depth()
                     == self
                         .analysis
-                        .must_get_function_attributes_from_node_id(&resolved_node_id)
-                        .definition_depth;
+                        .must_get_function_layout(&resolved_node_id)
+                        .parent_frame_depth;
                 self.append_instruction(Instruction::Call(CallSpec {
-                    function_node_id: self.analysis.resolve(&callee.node_id),
+                    function_node_id: self.analysis.must_resolve(&callee.node_id).clone(),
                     static_link_reg: if is_caller_parent { frame_reg } else { 0 },
                     arg_regs,
                     dst_reg,
@@ -440,23 +437,24 @@ impl Lowerer {
     // and local offset within the frame for that node id
     fn get_frame_pointer_reg_and_logical_local_offset_for_node_id(
         &mut self,
-        node_id: String,
+        node_id: &String,
     ) -> (RegisterNumber, MemoryUnits) {
         let (variable_frame_depth, offset_from_frame_base) = {
-            let location = self
-                .analysis
-                .must_get_variable_attributes_from_node_id(&node_id);
-            (location.frame_depth, location.offset_from_frame_base)
+            let location = self.analysis.must_get_variable_layout(&node_id);
+            (
+                location.parent_frame_depth,
+                location.offset_from_parent_frame_base,
+            )
         };
 
         let hops = self.get_current_frame_depth() - variable_frame_depth;
         let frame_address_reg = self.get_next_register();
-        self.append_instruction(Instruction::LoadFrameAddress(LoadFrameAddressSpec {
+        self.append_instruction(Instruction::LoadFrameAddress(LoadFrameAddrSpec {
             dst_reg: frame_address_reg,
         }));
 
         for _ in 0..hops {
-            self.append_instruction(Instruction::LoadToRegister(LoadToRegisterSpec {
+            self.append_instruction(Instruction::LoadToRegister(LoadToRegSpec {
                 dst_reg: frame_address_reg,
                 src_base_reg: frame_address_reg,
                 offset: 0,
@@ -465,29 +463,29 @@ impl Lowerer {
 
         (
             frame_address_reg,
-            offset_from_frame_base + RESERVED_SLOTS_BEFORE_LOCALS,
+            offset_from_frame_base + RESERVED_LOGICAL_SLOTS_BEFORE_LOCALS,
         )
     }
 
     // How many memory units does a function take
     fn frame_size_for_function(&self, node_id: &str) -> MemoryUnits {
-        if let Some(IdentifierAttributes::Function(FunctionAttributes {
-            memory_units_consumed,
+        if let Some(IdentifierLayout::Function(FunctionLayout {
+            locals_occupied_stack_size,
             ..
-        })) = self.analysis.node_id_attributes.get(node_id)
+        })) = self.analysis.node_id_layout.get(node_id)
         {
-            return *memory_units_consumed + RESERVED_SLOTS_BEFORE_LOCALS;
+            return *locals_occupied_stack_size + RESERVED_LOGICAL_SLOTS_BEFORE_LOCALS;
         };
 
         panic!("LOWERING:: No function location recorded for {node_id}");
     }
 }
 
-impl From<UnaryOperator> for UnaryOperation {
+impl From<UnaryOperator> for UnaryOp {
     fn from(operator: UnaryOperator) -> Self {
         match operator {
-            UnaryOperator::Negate => UnaryOperation::Negate,
-            UnaryOperator::Not => UnaryOperation::Not,
+            UnaryOperator::Negate => UnaryOp::Negate,
+            UnaryOperator::Not => UnaryOp::Not,
         }
     }
 }

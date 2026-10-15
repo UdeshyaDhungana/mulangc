@@ -4,7 +4,7 @@ use crate::diagnostics::Span;
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::enum_variant_names)]
-pub enum VariableTypeToken {
+pub enum DataTypeToken {
     IntType,
     BooleanType,
     // CustomType(Identifier),
@@ -48,7 +48,7 @@ pub enum Token {
     RightBrace,
 
     TypeSpecifier,
-    VariableType(VariableTypeToken),
+    DataType(DataTypeToken),
 
     EndOfInput,
 }
@@ -91,8 +91,8 @@ impl Token {
 
     pub fn from_type_str(type_str: &str) -> Self {
         match type_str {
-            "int" => Token::VariableType(VariableTypeToken::IntType),
-            "bool" => Token::VariableType(VariableTypeToken::BooleanType),
+            "int" => Token::DataType(DataTypeToken::IntType),
+            "bool" => Token::DataType(DataTypeToken::BooleanType),
             _ => todo!("TOKEN:: custom types not supported yet"),
         }
     }
@@ -145,9 +145,9 @@ impl fmt::Display for Token {
             Token::RightBrace => "}",
 
             Token::TypeSpecifier => ":",
-            Token::VariableType(variable_type) => match variable_type {
-                VariableTypeToken::IntType => "int",
-                VariableTypeToken::BooleanType => "bool",
+            Token::DataType(data_type) => match data_type {
+                DataTypeToken::IntType => "int",
+                DataTypeToken::BooleanType => "bool",
             },
 
             Token::EndOfInput => "",

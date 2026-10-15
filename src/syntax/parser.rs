@@ -1,10 +1,13 @@
 use std::mem::discriminant;
 
+use uuid::Uuid;
+
 use crate::diagnostics::{Diagnostic, Span};
+use crate::syntax::ast::DataType::IntegerType;
 use crate::syntax::ast::*;
-use crate::syntax::sema::Counter;
 use crate::syntax::token::Token::Semicolon;
 use crate::syntax::token::{SpannedToken, Token};
+use crate::syntax::utils::Counter;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Precedence {
@@ -19,6 +22,9 @@ enum Precedence {
     Prefix,
     Call,
 }
+
+pub const __DEBUG_BOL_FUNCTION_NODE_ID: &str = "__debug_bol";
+pub const __DEBUG_BOL_BOOL_FUNCTION_NODE_ID: &str = "__debug_bolbool";
 
 pub fn parse(tokens: &[SpannedToken]) -> Result<AST, Vec<Diagnostic>> {
     let mut parser = Parser {
@@ -50,8 +56,74 @@ struct Parser<'tokens> {
 }
 
 impl Parser<'_> {
+    fn initialize_debug_builtins(&mut self, statements: &mut Vec<Statement>) {
+        statements.push(Statement {
+            kind: StatementKind::Function(FunctionDefinition {
+                identifier: Identifier {
+                    name: String::from("bol"),
+                    node_id: String::from(__DEBUG_BOL_FUNCTION_NODE_ID),
+                    span: Span::new(0, 0),
+                },
+                parameters: vec![FunctionParameter {
+                    identifier: Identifier {
+                        name: String::from("x"),
+                        node_id: Uuid::new_v4().into(),
+                        span: Span::new(0, 0),
+                    },
+                    spanned_data_type: SpannedDataType {
+                        span: Span::new(0, 0),
+                        data_type: IntegerType,
+                    },
+                    span: Span::new(0, 0),
+                }],
+                return_type: SpannedDataType {
+                    span: Span::new(0, 0),
+                    data_type: DataType::VoidType,
+                },
+                body: Block {
+                    statements: Vec::new(),
+                    span: Span::new(0, 0),
+                },
+            }),
+            span: Span::new(0, 0),
+        });
+
+        statements.push(Statement {
+            kind: StatementKind::Function(FunctionDefinition {
+                identifier: Identifier {
+                    name: String::from("bolbool"),
+                    node_id: String::from(__DEBUG_BOL_BOOL_FUNCTION_NODE_ID),
+                    span: Span::new(0, 0),
+                },
+                parameters: vec![FunctionParameter {
+                    identifier: Identifier {
+                        name: String::from("x"),
+                        node_id: Uuid::new_v4().into(),
+                        span: Span::new(0, 0),
+                    },
+                    spanned_data_type: SpannedDataType {
+                        span: Span::new(0, 0),
+                        data_type: DataType::BooleanType,
+                    },
+                    span: Span::new(0, 0),
+                }],
+                return_type: SpannedDataType {
+                    span: Span::new(0, 0),
+                    data_type: DataType::VoidType,
+                },
+                body: Block {
+                    statements: Vec::new(),
+                    span: Span::new(0, 0),
+                },
+            }),
+            span: Span::new(0, 0),
+        });
+    }
+
     fn parse_program(&mut self) -> Vec<Statement> {
         let mut statements = Vec::new();
+
+        self.initialize_debug_builtins(&mut statements);
 
         while !self.is_at(&Token::EndOfInput) {
             match self.parse_statement() {
@@ -65,7 +137,7 @@ impl Parser<'_> {
         statements
     }
 
-    fn get_node_id(&mut self, identifier_name: String) -> String {
+    fn get_node_id(&mut self, identifier_name: &str) -> NodeId {
         let next = self.counter.advance();
         format!("{identifier_name}_{next}")
     }
@@ -110,7 +182,7 @@ impl Parser<'_> {
         let start = self.expect(Token::Declare)?;
         let name = self.expect_identifier()?;
         self.expect(Token::TypeSpecifier)?;
-        let spanned_var_type = self.expect_variable_type()?;
+        let spanned_data_type = self.expect_variable_type()?;
         self.expect(Token::Assign)?;
         let value = self.parse_expression(Precedence::Lowest)?;
         let end = self.expect_semicolon()?;
@@ -119,7 +191,7 @@ impl Parser<'_> {
             kind: StatementKind::Declaration {
                 identifier: name,
                 value,
-                spanned_var_type,
+                spanned_data_type,
             },
             span: start.joined_with(end),
         })
@@ -172,11 +244,9 @@ impl Parser<'_> {
             None
         };
 
-        let next_id = self.counter.advance();
-
         Ok((
             Conditional {
-                node_id: format!("yedi_{next_id}"),
+                node_id: self.get_node_id("yedi"),
                 condition,
                 then,
                 otherwise,
@@ -192,11 +262,10 @@ impl Parser<'_> {
         self.expect(Token::RightParenthesis)?;
         let body = self.parse_block()?;
 
-        let node_id = self.counter.advance();
         Ok(Statement {
             span: start.joined_with(body.span),
             kind: StatementKind::While {
-                node_id: format!("jabasamma_{node_id}"),
+                node_id: self.get_node_id("jabasamma"),
                 condition: Box::new(condition),
                 body,
             },
@@ -229,7 +298,6 @@ impl Parser<'_> {
         self.expect(Token::RightParenthesis)?;
         let body = self.parse_block()?;
 
-        let next_id = self.counter.advance();
         Ok(Statement {
             span: start.joined_with(body.span),
             kind: StatementKind::For {
@@ -237,7 +305,7 @@ impl Parser<'_> {
                 condition: Box::new(condition),
                 update: Box::new(update),
                 body,
-                node_id: format!("jabasamma_{next_id}"),
+                node_id: self.get_node_id("jabasamma"),
             },
         })
     }
@@ -291,7 +359,7 @@ impl Parser<'_> {
                 self.advance();
                 ExpressionKind::Identifier(Identifier {
                     name: name.clone(),
-                    node_id: self.get_node_id(name),
+                    node_id: self.get_node_id(&name),
                     span,
                 })
             }
@@ -407,16 +475,16 @@ impl Parser<'_> {
         let parameters = self.parse_function_parameters()?;
         self.expect(Token::RightParenthesis)?;
 
-        let return_type: SpannedVariableType;
+        let return_type: SpannedDataType;
 
-        if let Token::VariableType(t) = self.current_token().clone() {
+        if let Token::DataType(t) = self.current_token().clone() {
             let span = self.current_span();
             self.advance();
-            return_type = SpannedVariableType::from_variable_type_token(t, span)
+            return_type = SpannedDataType::from_data_type_token(t, span)
         } else {
-            return_type = SpannedVariableType {
+            return_type = SpannedDataType {
                 span: name.span,
-                var_type: VariableType::VoidType,
+                data_type: DataType::VoidType,
             }
         }
         let body = self.parse_block()?;
@@ -444,11 +512,11 @@ impl Parser<'_> {
             }
             let identifier = self.expect_identifier()?;
             self.expect(Token::TypeSpecifier)?;
-            let spanned_var_type = self.expect_variable_type()?;
-            let span = identifier.span.joined_with(spanned_var_type.span);
+            let spanned_data_type = self.expect_variable_type()?;
+            let span = identifier.span.joined_with(spanned_data_type.span);
             items.push(FunctionParameter {
                 identifier,
-                spanned_var_type,
+                spanned_data_type,
                 span,
             });
             if self.is_at(&Token::Comma) {
@@ -501,17 +569,17 @@ impl Parser<'_> {
         Ok(Identifier {
             name: name.clone(),
             span,
-            node_id: self.get_node_id(name),
+            node_id: self.get_node_id(&name),
         })
     }
 
-    fn expect_variable_type(&mut self) -> Result<SpannedVariableType, Diagnostic> {
-        let Token::VariableType(t) = self.current_token().clone() else {
+    fn expect_variable_type(&mut self) -> Result<SpannedDataType, Diagnostic> {
+        let Token::DataType(t) = self.current_token().clone() else {
             return Err(self.error_at_current("expected a type"));
         };
         let span = self.current_span();
         self.advance();
-        Ok(SpannedVariableType::from_variable_type_token(t, span))
+        Ok(SpannedDataType::from_data_type_token(t, span))
     }
 
     fn expect_semicolon(&mut self) -> Result<Span, Diagnostic> {

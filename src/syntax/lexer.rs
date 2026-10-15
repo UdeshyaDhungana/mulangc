@@ -172,7 +172,7 @@ fn is_name_start(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::syntax::token::VariableTypeToken;
+    use crate::syntax::token::DataTypeToken;
 
     fn tokens_of(source: &str) -> Vec<Token> {
         tokenize(source)
@@ -190,7 +190,7 @@ mod tests {
                 Token::Declare,
                 Token::Identifier("x".to_owned()),
                 Token::TypeSpecifier,
-                Token::VariableType(VariableTypeToken::IntType),
+                Token::DataType(DataTypeToken::IntType),
                 Token::Assign,
                 Token::Integer(43),
                 Token::Semicolon,
