@@ -1,4 +1,1 @@
-dhanda nothing() {}
-
-
-thoos t: int = nothing();
+dhanda run() { nope; }

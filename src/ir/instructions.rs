@@ -1,24 +1,24 @@
 use std::{collections::HashMap, fmt};
 
-use crate::syntax::sema::MemoryUnits;
+use crate::syntax::{ast::NodeId, sema::MemoryUnits};
 
 pub type RegisterNumber = usize;
 
 #[derive(Debug, Clone)]
-pub struct FunctionDefinitionSpec {
-    pub node_id: String,
+pub struct FnDefnSpec {
+    pub node_id: NodeId,
     pub frame_size: MemoryUnits,
     pub argc_sizes: Vec<MemoryUnits>,
 }
 
 #[derive(Debug, Clone)]
-pub struct LoadImmediateSpec {
+pub struct LoadImmSpec {
     pub dst_reg: RegisterNumber,
-    pub immediate: i64,
+    pub imm: i64,
 }
 
 #[derive(Debug, Clone)]
-pub struct MoveSpec {
+pub struct MovSpec {
     pub dst_reg: RegisterNumber,
     pub src_reg: RegisterNumber,
 }
@@ -41,7 +41,7 @@ pub enum BinaryOperation {
 }
 
 #[derive(Debug, Clone)]
-pub struct BinaryOpSpec {
+pub struct BinOpSpec {
     pub dst_reg: RegisterNumber,
     pub operation: BinaryOperation,
     pub left_reg: RegisterNumber,
@@ -49,7 +49,7 @@ pub struct BinaryOpSpec {
 }
 
 #[derive(Debug, Clone)]
-pub enum UnaryOperation {
+pub enum UnaryOp {
     Negate,
     Not,
 }
@@ -57,27 +57,27 @@ pub enum UnaryOperation {
 #[derive(Debug, Clone)]
 pub struct UnaryOpSpec {
     pub dst_reg: RegisterNumber,
-    pub operation: UnaryOperation,
+    pub operation: UnaryOp,
     pub operand_reg: RegisterNumber,
 }
 
 #[derive(Debug, Clone)]
-pub struct LoadToRegisterSpec {
+pub struct LoadToRegSpec {
     pub dst_reg: RegisterNumber,
     pub src_base_reg: RegisterNumber,
-    // Number of 'memory unit' offsets
+    // Number of 'memory unit' offsets from src_base_reg
     pub offset: MemoryUnits,
 }
 
 #[derive(Debug, Clone)]
-pub struct StoreFromRegisterSpec {
+pub struct StrFromRegSpec {
     pub src_reg: RegisterNumber,
     pub dst_base_reg: RegisterNumber,
     pub offset: MemoryUnits,
 }
 
 #[derive(Debug, Clone)]
-pub struct LoadFrameAddressSpec {
+pub struct LoadFrameAddrSpec {
     pub dst_reg: RegisterNumber,
 }
 
@@ -90,7 +90,7 @@ pub struct GoifSpec {
 
 #[derive(Debug, Clone)]
 pub struct CallSpec {
-    pub function_node_id: String,
+    pub function_node_id: NodeId,
     pub static_link_reg: RegisterNumber,
     pub arg_regs: Vec<RegisterNumber>,
     pub dst_reg: RegisterNumber,
@@ -103,14 +103,14 @@ pub struct ReturnSpec {
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
-    FunctionDefinition(FunctionDefinitionSpec),
-    LoadImmediate(LoadImmediateSpec),
-    Move(MoveSpec),
-    BinaryOp(BinaryOpSpec),
+    FunctionDefinition(FnDefnSpec),
+    LoadImmediate(LoadImmSpec),
+    Move(MovSpec),
+    BinaryOp(BinOpSpec),
     UnaryOp(UnaryOpSpec),
-    LoadToRegister(LoadToRegisterSpec),
-    StoreFromRegister(StoreFromRegisterSpec),
-    LoadFrameAddress(LoadFrameAddressSpec),
+    LoadToRegister(LoadToRegSpec),
+    StoreFromRegister(StrFromRegSpec),
+    LoadFrameAddress(LoadFrameAddrSpec),
     Label(String),
     Goto(String),
     Goif(GoifSpec),
@@ -118,67 +118,64 @@ pub enum Instruction {
     Return(ReturnSpec),
 }
 
-pub struct IRFunction {
-    instructions: Vec<Instruction>,
-    next_register_number: RegisterNumber,
+pub struct IRFunctionBlock {
+    // Initialization
+    id: String,
+    frame_size: MemoryUnits,
+    argc_sizes: Vec<MemoryUnits>,
 
-    // Internals
-    is_lowering_complete: bool,
+    // Population
+    next_reg_num: RegisterNumber,
+    instructions: Vec<Instruction>,
+
+    // State
+    has_lowering_ended: bool,
 }
 
-impl IRFunction {
-    pub fn new(node_id: &str, frame_size: MemoryUnits, argc_sizes: Vec<MemoryUnits>) -> Self {
+impl IRFunctionBlock {
+    pub fn new(
+        defn_node_id: &NodeId,
+        frame_size: MemoryUnits,
+        argc_sizes: &[MemoryUnits],
+    ) -> Self {
         // 1 memory slot is reserved for the static link
-        let total_size: MemoryUnits = argc_sizes.iter().sum::<MemoryUnits>() + 1;
-        IRFunction {
-            instructions: vec![Instruction::FunctionDefinition(FunctionDefinitionSpec {
-                node_id: String::from(node_id),
-                frame_size,
-                argc_sizes,
-            })],
-            is_lowering_complete: false,
-            next_register_number: total_size,
+        IRFunctionBlock {
+            id: defn_node_id.clone(),
+            frame_size,
+            argc_sizes: argc_sizes.to_vec(),
+
+            // Reserve first register for static link
+            next_reg_num: 1 + argc_sizes.iter().sum::<MemoryUnits>(),
+            instructions: Vec::new(),
+
+            has_lowering_ended: false,
         }
     }
 
     pub fn get_next_register(&mut self) -> RegisterNumber {
-        let next = self.next_register_number;
-        self.next_register_number += 1;
+        let next = self.next_reg_num;
+        self.next_reg_num += 1;
         next
     }
 
     pub fn max_register_no(&self) -> RegisterNumber {
-        self.next_register_number - 1
+        self.next_reg_num - 1
     }
 
-    pub fn node_id(&self) -> String {
-        if let Instruction::FunctionDefinition(definition) = &self.instructions[0] {
-            return definition.node_id.clone();
-        }
-        panic!("First instruction of a function must be its definition")
+    pub fn id(&self) -> &String {
+        &self.id
     }
 
-    // In slots: static link, params and locals
     pub fn frame_size(&self) -> usize {
-        if let Instruction::FunctionDefinition(definition) = &self.instructions[0] {
-            return definition.frame_size;
-        }
-        panic!("First instruction of a function must be its definition")
+        self.frame_size
     }
 
     pub fn argc_sizes(&self) -> &Vec<MemoryUnits> {
-        if let Instruction::FunctionDefinition(definition) = &self.instructions[0] {
-            return &definition.argc_sizes;
-        }
-        panic!("First instruction of a function must be its definition")
+        &self.argc_sizes
     }
 
     pub fn push_instruction(&mut self, i: Instruction) {
-        if matches!(i, Instruction::FunctionDefinition(..)) {
-            panic!("Instruction::FunctionDefinition(..) cannot be pushed")
-        }
-
-        if self.is_lowering_complete {
+        if self.has_lowering_ended {
             panic!("Cannot push instruction to an ended function")
         }
 
@@ -186,23 +183,20 @@ impl IRFunction {
     }
 
     pub fn end(&mut self) {
-        if self.instructions.is_empty() {
-            panic!("Cannot end function before it's begun")
-        }
-        self.is_lowering_complete = true;
+        self.has_lowering_ended = true;
     }
 
     pub fn get_instructions(&self) -> &Vec<Instruction> {
-        if !self.is_lowering_complete {
+        if !self.has_lowering_ended {
             panic!("Cannot get instruction from a function which has not ended")
         }
         &self.instructions
     }
 }
 
-pub type IRProgram = HashMap<String, IRFunction>;
+pub type IRProgram = HashMap<String, IRFunctionBlock>;
 
-// Anything below this is slop generated
+// Anything below this line is slop
 impl fmt::Display for BinaryOperation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -223,11 +217,11 @@ impl fmt::Display for BinaryOperation {
     }
 }
 
-impl fmt::Display for UnaryOperation {
+impl fmt::Display for UnaryOp {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            UnaryOperation::Negate => "-",
-            UnaryOperation::Not => "!",
+            UnaryOp::Negate => "-",
+            UnaryOp::Not => "!",
         })
     }
 }
@@ -240,7 +234,7 @@ fn format_offset(offset: usize) -> String {
 impl fmt::Display for Instruction {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Instruction::FunctionDefinition(FunctionDefinitionSpec {
+            Instruction::FunctionDefinition(FnDefnSpec {
                 node_id,
                 frame_size,
                 argc_sizes: argc,
@@ -252,17 +246,17 @@ impl fmt::Display for Instruction {
                     argc_strs.join(", ")
                 )
             }
-            Instruction::LoadImmediate(LoadImmediateSpec {
+            Instruction::LoadImmediate(LoadImmSpec {
                 dst_reg: register_num,
-                immediate,
+                imm: immediate,
             }) => write!(formatter, "ldi r{register_num}, {immediate}"),
-            Instruction::Move(MoveSpec {
+            Instruction::Move(MovSpec {
                 dst_reg: dest_reg,
                 src_reg,
             }) => {
                 write!(formatter, "mov r{dest_reg}, r{src_reg}")
             }
-            Instruction::BinaryOp(BinaryOpSpec {
+            Instruction::BinaryOp(BinOpSpec {
                 dst_reg: dest_reg,
                 left_reg,
                 operation,
@@ -276,7 +270,7 @@ impl fmt::Display for Instruction {
                 operation,
                 operand_reg,
             }) => write!(formatter, "r{dest_reg} <- {operation}r{operand_reg}"),
-            Instruction::LoadToRegister(LoadToRegisterSpec {
+            Instruction::LoadToRegister(LoadToRegSpec {
                 dst_reg,
                 src_base_reg: base_reg,
                 offset,
@@ -285,7 +279,7 @@ impl fmt::Display for Instruction {
                 "ldr r{dst_reg}, r{base_reg}{}",
                 format_offset(*offset)
             ),
-            Instruction::StoreFromRegister(StoreFromRegisterSpec {
+            Instruction::StoreFromRegister(StrFromRegSpec {
                 src_reg,
                 dst_base_reg: base_reg,
                 offset,
@@ -294,7 +288,7 @@ impl fmt::Display for Instruction {
                 "str r{src_reg}, r{base_reg}{}",
                 format_offset(*offset)
             ),
-            Instruction::LoadFrameAddress(LoadFrameAddressSpec { dst_reg }) => {
+            Instruction::LoadFrameAddress(LoadFrameAddrSpec { dst_reg }) => {
                 write!(formatter, "ldaf r{dst_reg}")
             }
             Instruction::Label(label) => write!(formatter, "{label}:"),
@@ -328,8 +322,8 @@ impl fmt::Display for Instruction {
 pub fn format_program(program: &IRProgram) -> String {
     let mut output = String::new();
 
-    for ir_function in program.values() {
-        for instruction in &ir_function.instructions {
+    for ir_function_block in program.values() {
+        for instruction in &ir_function_block.instructions {
             let indentation = match instruction {
                 Instruction::FunctionDefinition(_) | Instruction::Label(_) => "",
                 _ => "  ",

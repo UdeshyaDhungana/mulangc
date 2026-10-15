@@ -1,10 +1,13 @@
 use crate::{
     ir::instructions::{
-        BinaryOpSpec, BinaryOperation, CallSpec, FunctionDefinitionSpec, GoifSpec, IRFunction,
-        IRProgram, Instruction, LoadFrameAddressSpec, LoadImmediateSpec, LoadToRegisterSpec,
-        MoveSpec, ReturnSpec, StoreFromRegisterSpec, UnaryOpSpec, UnaryOperation,
+        BinOpSpec, BinaryOperation, CallSpec, FnDefnSpec, GoifSpec, IRFunctionBlock, IRProgram,
+        Instruction, LoadFrameAddrSpec, LoadImmSpec, LoadToRegSpec, MovSpec, ReturnSpec,
+        StrFromRegSpec, UnaryOp, UnaryOpSpec,
     },
-    syntax::sema::{__DEBUG_BOL_BOOL_FUNCTION_NODE_ID, __DEBUG_BOL_FUNCTION_NODE_ID, MemoryUnits},
+    syntax::{
+        parser::{__DEBUG_BOL_BOOL_FUNCTION_NODE_ID, __DEBUG_BOL_FUNCTION_NODE_ID},
+        sema::MemoryUnits,
+    },
     to_i64,
 };
 
@@ -170,7 +173,7 @@ impl CodeGenerator {
         self.write_assembly_file()
     }
 
-    fn generate_fn(&mut self, fn_node_id: String, ir_fn: IRFunction) {
+    fn generate_fn(&mut self, fn_node_id: String, ir_fn: IRFunctionBlock) {
         self.begin_new_text_section();
         let max_register_no = ir_fn.max_register_no();
         let argc = ir_fn.argc_sizes().iter().sum::<MemoryUnits>();
@@ -182,7 +185,7 @@ impl CodeGenerator {
 
         for instruction in ir_fn.get_instructions() {
             match instruction {
-                Instruction::FunctionDefinition(FunctionDefinitionSpec { node_id, .. }) => {
+                Instruction::FunctionDefinition(FnDefnSpec { node_id, .. }) => {
                     self.emit_outer_level_line(&format!("{}:", node_id));
                     self.emit_assembly_for_reserving_frame(max_register_no);
 
@@ -213,14 +216,14 @@ impl CodeGenerator {
                         self.emit_line("str x11, [x29, x10]");
                     }
                 }
-                Instruction::LoadImmediate(LoadImmediateSpec { dst_reg, immediate }) => {
-                    self.emit_load_immediate_into_xn(*immediate, 0);
+                Instruction::LoadImmediate(LoadImmSpec { dst_reg, imm }) => {
+                    self.emit_load_immediate_into_xn(*imm, 0);
                     let reg_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(*dst_reg);
                     self.emit_load_immediate_into_xn(reg_offset, 10);
                     self.emit_line("str x0, [x29, x10]");
                 }
-                Instruction::Move(MoveSpec { dst_reg, src_reg }) => {
+                Instruction::Move(MovSpec { dst_reg, src_reg }) => {
                     let src_reg_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(*src_reg);
                     let dst_reg_offset =
@@ -230,7 +233,7 @@ impl CodeGenerator {
                     self.emit_load_immediate_into_xn(dst_reg_offset, 10);
                     self.emit_line("str x0, [x29, x10]");
                 }
-                Instruction::BinaryOp(BinaryOpSpec {
+                Instruction::BinaryOp(BinOpSpec {
                     operation,
                     left_reg,
                     right_reg,
@@ -306,10 +309,10 @@ impl CodeGenerator {
                     self.emit_load_immediate_into_xn(operand_reg_offset, 10);
                     self.emit_line("ldr x1, [x29, x10]");
                     match operation {
-                        UnaryOperation::Negate => {
+                        UnaryOp::Negate => {
                             self.emit_line("neg x0, x1");
                         }
-                        UnaryOperation::Not => {
+                        UnaryOp::Not => {
                             self.emit_line("cmp x1, #0");
                             self.emit_line("cset x0, eq");
                         }
@@ -319,7 +322,7 @@ impl CodeGenerator {
                     self.emit_load_immediate_into_xn(dst_reg_offset, 10);
                     self.emit_line("str x0, [x29, x10]");
                 }
-                Instruction::LoadToRegister(LoadToRegisterSpec {
+                Instruction::LoadToRegister(LoadToRegSpec {
                     dst_reg,
                     src_base_reg,
                     offset,
@@ -339,7 +342,7 @@ impl CodeGenerator {
                     self.emit_load_immediate_into_xn(dst_reg_offset, 10);
                     self.emit_line("str x0, [x29, x10]");
                 }
-                Instruction::StoreFromRegister(StoreFromRegisterSpec {
+                Instruction::StoreFromRegister(StrFromRegSpec {
                     src_reg,
                     dst_base_reg,
                     offset,
@@ -360,7 +363,7 @@ impl CodeGenerator {
                     self.emit_load_immediate_into_xn(var_offset, 10);
                     self.emit_line("str x0, [x1, x10]");
                 }
-                Instruction::LoadFrameAddress(LoadFrameAddressSpec { dst_reg }) => {
+                Instruction::LoadFrameAddress(LoadFrameAddrSpec { dst_reg }) => {
                     let dst_reg_offset =
                         translate_logical_offset_to_physical_offset_for_ir_register(*dst_reg);
                     self.emit_load_immediate_into_xn(dst_reg_offset, 10);

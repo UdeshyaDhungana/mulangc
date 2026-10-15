@@ -1,8 +1,9 @@
 pub mod ast;
 mod lexer;
-mod parser;
+pub mod parser;
 pub mod sema;
 mod token;
+pub mod utils;
 
 pub use ast::{
     AST, BinaryOperator, Block, Conditional, Else, Expression, ExpressionKind, FunctionDefinition,
@@ -19,6 +20,14 @@ pub fn parse(source: &str) -> Result<AST, Vec<Diagnostic>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The parser puts the `bol` and `bolbool` builtins first; drop them
+    fn parse(source: &str) -> Result<AST, Vec<Diagnostic>> {
+        super::parse(source).map(|mut ast| {
+            ast.block.statements.drain(..2);
+            ast
+        })
+    }
 
     fn reprint(source: &str) -> String {
         parse(source)
