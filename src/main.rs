@@ -22,7 +22,7 @@ fn main() -> ExitCode {
         [path] => compile_file(path, Mode::Assemble),
         [flag, path] if flag == "--irtext" => compile_file(path, Mode::EmitIRText),
         _ => {
-            eprintln!("usage: mulang [--irtext] program.muji");
+            eprintln!("usage: mulang [--irtext] program.mu");
             ExitCode::FAILURE
         }
     }
@@ -47,15 +47,15 @@ fn compile_file(path: &str, mode: Mode) -> ExitCode {
 
     let file_path = Path::new(path);
 
-    if file_path.extension().and_then(|ext| ext.to_str()) != Some("muji") {
-        eprintln!("File should be in .muji format");
+    if file_path.extension().and_then(|ext| ext.to_str()) != Some("mu") {
+        eprintln!("File should be in .mu format");
         return ExitCode::FAILURE;
     }
 
     let file_name_without_extension = match file_path.file_stem().and_then(|stem| stem.to_str()) {
         Some(name) => name,
         None => {
-            eprintln!("File should be in .muji format");
+            eprintln!("File should be in .mu format");
             return ExitCode::FAILURE;
         }
     };
