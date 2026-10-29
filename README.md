@@ -99,3 +99,31 @@ Tightest first. Parentheses group.
 | --- | --- |
 | `bol(x)` | prints an `int` |
 | `bolbool(x)` | prints a `bool` |
+
+## Building and running
+
+```bash
+cargo build
+cargo run -- program.mu      # writes program.s
+cargo run -- --irtext program.mu   # writes program.irmu instead
+```
+
+The native backend emits macOS arm64 assembly, so assembling and running a
+program needs `clang`:
+
+```bash
+clang -g program.s -o program && ./program
+```
+
+`./test.sh` does all of that for `test.mu`, and `./test.sh --ir` prints the
+IR text instead.
+
+## Tests
+
+```bash
+cargo test
+```
+
+`tests/programs.rs` compiles, assembles, and runs every `.mu` file under
+`tests/programs`, comparing stdout against the `.out` file beside it. To add a
+case, drop in a matching `.mu` and `.out` pair — it is picked up automatically.

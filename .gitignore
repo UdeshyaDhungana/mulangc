@@ -1,3 +1,4 @@
+# Cargo build output
 /target
 
 # Artifacts from ./test.sh — test.sh and test.mu themselves are tracked.

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Compile test.mu with the selected backend and run or show the result.
-#   ./test.sh              native: assemble, link, run
-#   ./test.sh --ir         run the IR interpreter
-#   ./test.sh --ir --text  write test.irmu and print it
+#   ./test.sh        native: assemble, link, run
+#   ./test.sh --ir   write test.irmu and print it
 set -euo pipefail
 
 case "$*" in
@@ -22,19 +21,13 @@ case "$*" in
         echo "--- exit $? ---"
         ;;
     "--ir")
-        echo "--- interpreting ---"
-        set +e
-        cargo run --quiet -- --ir test.mu
-        echo "--- exit $? ---"
-        ;;
-    "--ir --text" | "--text --ir")
-        cargo run --quiet -- --ir --text test.mu
+        cargo run --quiet -- --irtext test.mu
 
         echo "--- test.irmu ---"
         cat test.irmu
         ;;
     *)
-        echo "usage: $0 [--ir [--text]]" >&2
+        echo "usage: $0 [--ir]" >&2
         exit 1
         ;;
 esac

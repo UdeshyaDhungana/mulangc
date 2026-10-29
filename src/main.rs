@@ -1,3 +1,9 @@
+//! The `mulang` command line driver.
+//!
+//! Takes one `.mu` source file and either lowers it to macOS arm64 assembly
+//! beside the source, or, with `--irtext`, writes the three-address IR as
+//! text to a `.irmu` file.
+
 use std::path::Path;
 use std::process::ExitCode;
 

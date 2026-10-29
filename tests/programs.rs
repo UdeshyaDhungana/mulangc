@@ -8,6 +8,9 @@
 //! End-to-end tests: compile each program in `tests/programs`, assemble it,
 //! run it, and compare what it printed against the matching `.out` file.
 //!
+//! To add a case, drop a `.mu` file anywhere under `tests/programs` with a
+//! `.out` file of the same stem beside it; both are picked up automatically.
+//!
 //! Every program gets its own scratch directory under `target/mulang-tests`,
 //! because the compiler writes `{stem}.s` relative to the working directory
 //! rather than next to the source. The artifacts are left behind on purpose —
