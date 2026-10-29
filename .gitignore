@@ -1,6 +1,6 @@
 /target
 
-# Artifacts from ./test.sh — test.sh and test.muji themselves are tracked.
+# Artifacts from ./test.sh — test.sh and test.mu themselves are tracked.
 /test
 /test.s
 /test.dSYM/

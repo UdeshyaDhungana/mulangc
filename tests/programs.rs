@@ -8,7 +8,7 @@
 //! End-to-end tests: compile each program in `tests/programs`, assemble it,
 //! run it, and compare what it printed against the matching `.out` file.
 //!
-//! Every program gets its own scratch directory under `target/muji-tests`,
+//! Every program gets its own scratch directory under `target/mulang-tests`,
 //! because the compiler writes `{stem}.s` relative to the working directory
 //! rather than next to the source. The artifacts are left behind on purpose —
 //! when a test fails, the assembly that failed is sitting there to read.
@@ -110,7 +110,7 @@ fn programs_directory() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/programs")
 }
 
-/// Every `.muji` file under `tests/programs`, at any depth, sorted so the
+/// Every `.mu` file under `tests/programs`, at any depth, sorted so the
 /// failure report reads the same way twice. Subdirectories are how the corpus
 /// is grouped — `functions/`, `control_flow/`, and so on — and carry no meaning
 /// beyond that.
@@ -132,7 +132,7 @@ fn collect_programs_under(directory: &Path, programs: &mut Vec<PathBuf>) {
             collect_programs_under(&path, programs);
         } else if path
             .extension()
-            .is_some_and(|extension| extension == "muji")
+            .is_some_and(|extension| extension == "mu")
         {
             programs.push(path);
         }
@@ -171,7 +171,7 @@ fn run_one(source: &Path) -> Result<(), String> {
 
 /// Compile to assembly, assemble with `clang`, run the binary, compare.
 fn run_native(source: &Path, scratch: &Path, name: &str) -> Result<(), (String, String)> {
-    let compiled = run_in(scratch, COMPILER, &[&format!("{name}.muji")]);
+    let compiled = run_in(scratch, COMPILER, &[&format!("{name}.mu")]);
     if !compiled.status.success() {
         return Err(("failed to compile".into(), indent(&stderr_of(&compiled))));
     }
@@ -217,18 +217,18 @@ fn compare(source: &Path, (actual_output, actual_exit, stderr): (String, i32, St
     Ok(())
 }
 
-/// A clean `target/muji-tests/{name}` holding just the source, so the
+/// A clean `target/mulang-tests/{name}` holding just the source, so the
 /// compiler's cwd-relative output lands somewhere harmless.
 fn prepare_scratch_directory(directory_name: &str, source: &Path, stem: &str) -> PathBuf {
     let scratch = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("target/muji-tests")
+        .join("target/mulang-tests")
         .join(directory_name);
 
     if scratch.exists() {
         fs::remove_dir_all(&scratch).expect("cannot clear scratch directory");
     }
     fs::create_dir_all(&scratch).expect("cannot create scratch directory");
-    fs::copy(source, scratch.join(format!("{stem}.muji"))).expect("cannot copy program");
+    fs::copy(source, scratch.join(format!("{stem}.mu"))).expect("cannot copy program");
 
     scratch
 }
@@ -302,7 +302,7 @@ fn expected_stdout(source: &Path) -> String {
 }
 
 /// The `.exit` file beside the program, defaulting to 0. Every program exits 0
-/// today, so no program has one yet — but once `muji`'s return value becomes
+/// today, so no program has one yet — but once `mulang`'s return value becomes
 /// the process exit code, this is already here.
 fn expected_exit_code(source: &Path) -> i32 {
     fs::read_to_string(source.with_extension("exit"))

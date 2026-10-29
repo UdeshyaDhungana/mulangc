@@ -9,7 +9,7 @@
       "args": ["build"]
     },
     "program": "$ZED_WORKTREE_ROOT/target/debug/mulang",
-    "args": ["test.muji"],
+    "args": ["test.mu"],
     "cwd": "$ZED_WORKTREE_ROOT"
   }
 ]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compile test.muji with the selected backend and run or show the result.
+# Compile test.mu with the selected backend and run or show the result.
 #   ./test.sh              native: assemble, link, run
 #   ./test.sh --ir         run the IR interpreter
 #   ./test.sh --ir --text  write test.irmu and print it
@@ -7,7 +7,7 @@ set -euo pipefail
 
 case "$*" in
     "")
-        cargo run --quiet -- test.muji
+        cargo run --quiet -- test.mu
 
         echo "--- test.s ---"
         cat test.s
@@ -24,11 +24,11 @@ case "$*" in
     "--ir")
         echo "--- interpreting ---"
         set +e
-        cargo run --quiet -- --ir test.muji
+        cargo run --quiet -- --ir test.mu
         echo "--- exit $? ---"
         ;;
     "--ir --text" | "--text --ir")
-        cargo run --quiet -- --ir --text test.muji
+        cargo run --quiet -- --ir --text test.mu
 
         echo "--- test.irmu ---"
         cat test.irmu
