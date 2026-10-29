@@ -100,6 +100,90 @@ Tightest first. Parentheses group.
 | `bol(x)` | prints an `int` |
 | `bolbool(x)` | prints a `bool` |
 
+## How the compiler works
+
+`src/main.rs` drives four stages, each a separate module. There is no LLVM or other
+compiler backend — the arm64 assembly is emitted directly, and `clang` only
+assembles and links it.
+
+| Stage | Module | Produces |
+| --- | --- | --- |
+| Lex and parse | `syntax/lexer.rs`, `syntax/parser.rs` | an AST (`syntax/ast.rs`) |
+| Semantic analysis | `syntax/sema.rs` | name resolution and frame layout |
+| Lowering | `ir/lowering.rs` | three-address IR (`ir/_ir_specs.md`) |
+| Code generation | `codegen/macos_arm64.rs` | macOS arm64 assembly |
+
+Semantic analysis resolves every identifier to its declaration and decides where
+each variable lives — which frame, at which slot. It is also where undefined
+names, redeclarations, type mismatches, wrong argument counts, and functions
+that fall off the end without returning are reported. Because functions may nest
+and see their enclosing scope, each frame carries a **static link** to its
+parent, and sema records the frame depth that resolving a name has to walk.
+
+Lowering flattens the AST into three-address instructions over unlimited virtual
+registers, each assigned exactly once. Variables stay in frame slots rather than
+registers, so there are no phi nodes. Code generation scales slots to bytes,
+allocates real registers, and handles the calling convention: eight arguments in
+registers, the rest on a 16-byte-aligned stack.
+
+Errors from any stage go through `diagnostics.rs`, which prints the message with
+the offending line and a caret span.
+
+### A program through the pipeline
+
+```mu
+dhanda factorial(n: int) int {
+    yedi (n <= 1) {
+        de 1;
+    }
+    de n * factorial(n - 1);
+}
+
+bol(factorial(5));
+```
+
+`mulang --irtext factorial.mu` stops after lowering and writes the IR:
+
+```
+fn factorial_0, frame_size=2, 1
+  ldaf r2
+  str r0, r2, 0
+  str r1, r2, 1
+  ldaf r3
+  ldr r4, r3, 1
+  ldi r6, 1
+  r5 <- r4 <= r6
+  goif r5, yedi_3_then, yedi_3_else
+yedi_3_then:
+  ldi r7, 1
+  ret r7
+  goto yedi_3_end
+yedi_3_else:
+yedi_3_end:
+  ldaf r8
+  ldr r9, r8, 1
+  ...
+  r16 <- call factorial_0, r0, r14
+  r10 <- r9 * r16
+  ret r10
+```
+
+`mulang factorial.mu` runs the same pipeline to the end and writes
+`factorial.s`. The prologue saves the frame record and opens the frame, and the
+`yedi` becomes a compare and a conditional branch:
+
+```asm
+factorial_0:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    ...
+    cmp x1, x2
+    cset x0, le
+    cbz x0, yedi_3_else
+```
+
+Assembling and running it prints `120`.
+
 ## Building and running
 
 ```bash
