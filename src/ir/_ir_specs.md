@@ -1,4 +1,4 @@
-# muji IR
+# Mulang IR
 
 Three-address IR, lowered from the AST after sema.
 

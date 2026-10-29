@@ -1,9 +1,9 @@
-# muji
+# Mulang
 
 A program is a list of statements, run top to bottom, starting at the first
 line of the file.
 
-```muji
+```mu
 thoos x: int = 6;
 bol(x * 7);
 ```
@@ -14,7 +14,7 @@ bol(x * 7);
 
 ## Variables
 
-```muji
+```mu
 thoos x: int = 43;
 x = x + 1;
 ```
@@ -24,7 +24,7 @@ x = x + 1;
 
 ## Functions
 
-```muji
+```mu
 dhanda add(a: int, b: int) int {
     de a + b;
 }
@@ -33,7 +33,7 @@ dhanda greet(n: int) {
     bol(n);
 }
 
-bol(add(6, 9));
+bol(add(3, 4));
 greet(1);
 ```
 
@@ -47,7 +47,7 @@ before the line that declares it.
 
 ## Conditionals
 
-```muji
+```mu
 yedi (n > 0) {
     bol(1);
 } natra yedi (n < 0) {
@@ -61,7 +61,7 @@ yedi (n > 0) {
 
 ## Loops
 
-```muji
+```mu
 jabasamma (i < 10) {
     i = i + 1;
 }
@@ -89,7 +89,7 @@ Tightest first. Parentheses group.
 
 ## Comments
 
-```muji
+```mu
 // to the end of the line
 ```
 
